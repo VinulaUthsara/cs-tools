@@ -79,33 +79,51 @@ export default function AppLayout() {
   )?.id;
 
   return (
-    <Box sx={{ display: "flex", minHeight: "100vh" }}>
-      <Sidebar activeItem={activeItem} onSelect={(id) => {
-        const item = NAV_ITEMS.find((i) => i.id === id);
-        if (item) navigate(item.path);
-      }}>
-        <Sidebar.Nav>
-          <Sidebar.Category>
-            <Sidebar.CategoryLabel>Support Portal Lite</Sidebar.CategoryLabel>
-            {NAV_ITEMS.map((item) => (
-              <Sidebar.Item key={item.id} id={item.id}>
-                <Sidebar.ItemIcon>
-                  <item.icon />
-                </Sidebar.ItemIcon>
-                <Sidebar.ItemLabel>{item.label}</Sidebar.ItemLabel>
-              </Sidebar.Item>
-            ))}
-          </Sidebar.Category>
-        </Sidebar.Nav>
-      </Sidebar>
-
-      <Box component="main" sx={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
-        <Box sx={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 0.5, p: 1 }}>
-          <ThemeSelect />
-          <ColorSchemeToggle />
+    // Same three-region shell shape as one-wso2's AppShellLayout: an outer
+    // column pinned to the viewport height with overflow hidden, so the
+    // sidebar's own background/border stretches the full height instead of
+    // stopping at its last nav item — a plain `minHeight` flex row lets a
+    // flex item's cross-axis stretch get short-circuited by its own content
+    // height in some Sidebar/Box combinations, which is exactly the bug this
+    // fixes. Only `main` scrolls; the sidebar and the theme-control row stay
+    // fixed.
+    <Box sx={{ display: "flex", flexDirection: "column", height: "100dvh", overflow: "hidden" }}>
+      <Box sx={{ display: "flex", flex: 1, minHeight: 0, minWidth: 0, overflow: "hidden" }}>
+        <Box component="aside" sx={{ flexShrink: 0, minWidth: 0 }}>
+          <Sidebar
+            activeItem={activeItem}
+            onSelect={(id) => {
+              const item = NAV_ITEMS.find((i) => i.id === id);
+              if (item) navigate(item.path);
+            }}
+          >
+            <Sidebar.Nav>
+              <Sidebar.Category>
+                <Sidebar.CategoryLabel>Support Portal Lite</Sidebar.CategoryLabel>
+                {NAV_ITEMS.map((item) => (
+                  <Sidebar.Item key={item.id} id={item.id}>
+                    <Sidebar.ItemIcon>
+                      <item.icon />
+                    </Sidebar.ItemIcon>
+                    <Sidebar.ItemLabel>{item.label}</Sidebar.ItemLabel>
+                  </Sidebar.Item>
+                ))}
+              </Sidebar.Category>
+            </Sidebar.Nav>
+          </Sidebar>
         </Box>
-        <Box sx={{ flex: 1, minWidth: 0, px: 3, pb: 3 }}>
-          <Outlet />
+
+        <Box
+          component="main"
+          sx={{ flex: 1, minWidth: 0, width: 0, display: "flex", flexDirection: "column", overflow: "hidden" }}
+        >
+          <Box sx={{ flexShrink: 0, display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 0.5, p: 1 }}>
+            <ThemeSelect />
+            <ColorSchemeToggle />
+          </Box>
+          <Box sx={{ flex: 1, minHeight: 0, overflow: "auto", px: 3, pb: 3 }}>
+            <Outlet />
+          </Box>
         </Box>
       </Box>
     </Box>
