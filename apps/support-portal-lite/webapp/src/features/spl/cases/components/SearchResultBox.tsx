@@ -17,7 +17,7 @@
 // Ported from the source app's components/SearchResultBox.tsx (via
 // one-wso2's plain-MUI port), rebuilt on @wso2/oxygen-ui.
 import { Card, Stack, Typography } from "@wso2/oxygen-ui";
-import { alpha, useTheme } from "@mui/material/styles";
+import { alpha, useColorScheme } from "@mui/material/styles";
 import { useNavigate } from "react-router";
 import { LinearLoadingPanel, NoResultsPanel } from "./StatePanels";
 import type { CaseDetails, CaseDetailsWithCount, AccountSummary, ProjectSummary } from "../api/splCaseTypes";
@@ -32,9 +32,13 @@ export function SearchResultBox({
   type: SearchOptions;
 }) {
   const navigate = useNavigate();
-  const theme = useTheme();
+  // theme.palette.mode is not live under oxygen-ui's CSS-variables theme
+  // (extendTheme()) — confirmed empirically. useColorScheme() is the hook
+  // that actually tracks the live scheme.
+  const { mode: colorMode, systemMode } = useColorScheme();
+  const isDark = (colorMode === "system" ? systemMode : colorMode) === "dark";
   // Same warm-orange hover identity in both modes — see CaseStateCard.
-  const hoverBg = alpha("#ff7300", theme.palette.mode === "dark" ? 0.24 : 0.35);
+  const hoverBg = alpha("#ff7300", isDark ? 0.24 : 0.35);
 
   // No "/csm" prefix — this app's own routes (see App.tsx).
   const navigateTo = (id: string) => {

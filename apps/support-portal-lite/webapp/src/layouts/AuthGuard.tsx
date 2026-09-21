@@ -18,6 +18,7 @@ import { useEffect, useRef } from "react";
 import { useAsgardeo } from "@asgardeo/react";
 import { Outlet } from "react-router";
 import { Box, CircularProgress } from "@wso2/oxygen-ui";
+import { devBypassAuth } from "@config/authConfig";
 
 // Wraps every route. If the caller isn't signed in, starts the Asgardeo
 // redirect flow; otherwise renders the routed page.
@@ -27,6 +28,7 @@ export default function AuthGuard() {
   const startedSignInRef = useRef(false);
 
   useEffect(() => {
+    if (devBypassAuth) return; // dev-only: never redirect
     if (isLoading) return;
     if (!isSignedIn) {
       if (startedSignInRef.current) return;
@@ -36,6 +38,8 @@ export default function AuthGuard() {
     }
     startedSignInRef.current = false;
   }, [isLoading, isSignedIn, signIn]);
+
+  if (devBypassAuth) return <Outlet />;
 
   if (isLoading || !isSignedIn) {
     return (

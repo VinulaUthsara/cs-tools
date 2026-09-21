@@ -1,9 +1,10 @@
 /* Copyright (c) 2026 WSO2 LLC. (https://www.wso2.com). All Rights Reserved.
 
 Ported from one-wso2's features/spl/schedule/ScheduleTable.css (itself ported
-verbatim from SupportPortalLite's src/styles/ScheduleTable.css). one-wso2's
-dark-mode override block is dropped here — it hooked one-wso2's own
-`data-color-scheme` toggle attribute, which this app doesn't have. */
+verbatim from SupportPortalLite's src/styles/ScheduleTable.css). This app
+also stamps `data-color-scheme` on <html> when oxygen-ui's theme toggle
+switches to dark mode, so the dark-mode override block below hooks that
+same attribute — a plain CSS file has no access to the JS theme/mode. */
 
 .schedule-table-container {
    margin-top: 20px;
@@ -60,4 +61,24 @@ dark-mode override block is dropped here — it hooked one-wso2's own
    z-index: 2;
    background-color: #ffffff;
    border-bottom: 3x solid #ffffff;
+}
+
+/* Dark-mode overrides — the rules above assume a permanently-light page. */
+[data-color-scheme="dark"] .schedule-app-container {
+   background: #121212;
+}
+
+[data-color-scheme="dark"] .schedule-table-cell {
+   border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+[data-color-scheme="dark"] .schedule-sticky-column {
+   background-color: #22303a;
+   border: 1px solid rgba(255, 255, 255, 0.12);
+   color: #e6e6e6;
+}
+
+[data-color-scheme="dark"] .schedule-sticky-header {
+   background-color: #121212;
+   border-bottom: 3px solid #121212;
 }

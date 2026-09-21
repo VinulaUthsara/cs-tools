@@ -27,8 +27,8 @@ import {
   ListItemText,
   Stack,
   Typography,
-  useTheme,
 } from "@wso2/oxygen-ui";
+import { useColorScheme } from "@mui/material/styles";
 import { useGetApi } from "@features/spl/api/useSplApi";
 import { splBackendUrl } from "@config/apiConfig";
 import type { ABTTeamMembersDetails } from "../api/splAccountTypes";
@@ -56,11 +56,14 @@ export default function TeamMembersDrawer({
   }, []);
 
   const capitalize = (item: string) => item.charAt(0).toUpperCase() + item.slice(1);
-  const theme = useTheme();
-  const roleBadgeColors =
-    theme.palette.mode === "dark"
-      ? { backgroundColor: "#1a3c3c", color: "#80cbc4" }
-      : { backgroundColor: "#e0f7fa", color: "#00796b" };
+  // theme.palette.mode is not live under oxygen-ui's CSS-variables theme
+  // (extendTheme()) — confirmed empirically. useColorScheme() is the hook
+  // that actually tracks the live scheme.
+  const { mode: colorMode, systemMode } = useColorScheme();
+  const isDark = (colorMode === "system" ? systemMode : colorMode) === "dark";
+  const roleBadgeColors = isDark
+    ? { backgroundColor: "#1a3c3c", color: "#80cbc4" }
+    : { backgroundColor: "#e0f7fa", color: "#00796b" };
 
   return (
     <Drawer anchor="right" open={open} onClose={onClose}>

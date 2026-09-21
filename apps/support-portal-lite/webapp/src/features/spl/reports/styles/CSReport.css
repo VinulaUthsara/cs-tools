@@ -21,14 +21,29 @@
   left: 0;
   width: 100vw;
   height: 100vh;
-  backdrop-filter: blur(5px); 
-  background-color: rgba(255, 255, 255, 0.5); 
+  backdrop-filter: blur(5px);
+  background-color: rgba(255, 255, 255, 0.5);
   z-index: -1;
+}
+
+/* This is the "generate a report" search-form overlay — app chrome, not the
+   printable report itself (that's now wrapped in its own fixed-light
+   reportPaperTheme, see SplCsReportPage.tsx), so it should follow the app's
+   live theme. Plain CSS has no theme access, so this hooks the same
+   data-color-scheme attribute oxygen-ui's own toggle sets on <html>. A white
+   blur tint over a dark page reads as a stray light haze, so dark mode gets
+   a dark tint instead. */
+[data-color-scheme="dark"] .blurred-background::before {
+  background-color: rgba(0, 0, 0, 0.5);
 }
 
 .centered-form {
   background-color: #fff;
   padding: 20px;
+}
+
+[data-color-scheme="dark"] .centered-form {
+  background-color: #1e1e1e;
 }
 
 .submitButton {

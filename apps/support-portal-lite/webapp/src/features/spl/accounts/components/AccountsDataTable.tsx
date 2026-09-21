@@ -34,6 +34,7 @@ import {
   Typography,
   useTheme,
 } from "@wso2/oxygen-ui";
+import { useColorScheme } from "@mui/material/styles";
 import { ChevronsLeftIcon, ChevronsRightIcon, ChevronLeftIcon, ChevronRightIcon } from "@wso2/oxygen-ui-icons-react";
 import type { DataStruct, ApiError } from "../api/splAccountTypes";
 import NoDataAvailable from "./NoDataAvailable";
@@ -114,8 +115,12 @@ function PopulateTable({
   handleChangePage: (event: unknown, newPage: number) => void;
   handleChangeRowsPerPage: (event: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => void;
 }) {
-  const theme = useTheme();
-  const hoverColor = theme.palette.mode === "dark" ? "#4d3a2a" : "#f9dcc5";
+  // theme.palette.mode is not live under oxygen-ui's CSS-variables theme
+  // (extendTheme()) — confirmed empirically. useColorScheme() is the hook
+  // that actually tracks the live scheme.
+  const { mode: colorMode, systemMode } = useColorScheme();
+  const isDark = (colorMode === "system" ? systemMode : colorMode) === "dark";
+  const hoverColor = isDark ? "#4d3a2a" : "#f9dcc5";
 
   return (
     <Paper sx={{ width: "100%", border: "2px solid", borderColor: "divider", borderRadius: "8px", overflow: "hidden" }}>

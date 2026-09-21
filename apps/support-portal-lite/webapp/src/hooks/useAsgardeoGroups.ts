@@ -16,6 +16,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { useAsgardeo } from "@asgardeo/react";
+import { devBypassAuth, devBypassGroups } from "@config/authConfig";
 
 // The signed-in user's Asgardeo group memberships, read from the `groups`
 // claim of the id_token. The `groups` scope is already requested at sign-in
@@ -68,6 +69,17 @@ export function useAsgardeoGroups(): AsgardeoGroups {
   });
 
   const retry = () => void query.refetch();
+
+  // Dev-only: AuthGuard's SPL_APP_DEV_BYPASS_AUTH skips signing in, so
+  // isSignedIn above never resolves and the query stays disabled forever —
+  // this hook would spin on "checking your access" with no way to reach the
+  // screen it's gating. Short-circuit with the configured
+  // SPL_APP_DEV_BYPASS_GROUPS instead; both constants fold away in a
+  // production build (see authConfig.ts), so this branch is physically
+  // absent from shipped code.
+  if (devBypassAuth) {
+    return { ready: true, groups: devBypassGroups, retry };
+  }
 
   if (query.isError) {
     return {

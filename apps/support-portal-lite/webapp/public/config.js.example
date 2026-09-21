@@ -32,4 +32,11 @@ window.config = {
   SPL_APP_ADD_ESCALATION_GROUPS: [],
   SPL_APP_DOWNLOAD_ATTACHMENT_GROUPS: [],
   SPL_APP_USAGE_METRICS_GROUPS: [],
+
+  // Dev-only escape hatch — renders every route without calling Asgardeo.
+  // Useful when there's no real Sales/SA account to sign in with locally.
+  // Real client id above stays configured either way — flip this back to
+  // false to return to real sign-in.
+  // SPL_APP_DEV_BYPASS_AUTH: true,
+  // SPL_APP_DEV_BYPASS_GROUPS: ["sales-team"],
 };

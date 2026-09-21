@@ -23,7 +23,7 @@
 // count card.
 import { useEffect, useState } from "react";
 import { Box, Grid, Paper, Typography } from "@wso2/oxygen-ui";
-import { useTheme } from "@mui/material/styles";
+import { useTheme, useColorScheme } from "@mui/material/styles";
 import { useGetApi } from "@features/spl/api/useSplApi";
 import { splBackendUrl } from "@config/apiConfig";
 import SplShell from "@components/SplShell";
@@ -58,6 +58,14 @@ function CasesContent() {
   const [caseState, setCaseState] = useState("");
   const [showTable, setShowTable] = useState(true);
   const theme = useTheme();
+  // theme.palette.mode is NOT live here: oxygen-ui's theme is built with
+  // extendTheme() (MUI's CSS-variables system), where a plain useTheme()
+  // call returns the theme's static reference mode, not the mode actually
+  // showing on screen — confirmed empirically (it kept resolving "light"
+  // with data-color-scheme="dark" set). useColorScheme() is the hook that
+  // actually tracks the live scheme.
+  const { mode: colorMode, systemMode } = useColorScheme();
+  const isDark = (colorMode === "system" ? systemMode : colorMode) === "dark";
 
   // Called unconditionally, one per fixed state — see file header comment.
   const q0 = useCaseStateQuery(STATES[0]);
@@ -79,7 +87,7 @@ function CasesContent() {
           <Grid size={{ xs: 12 }} sx={{ display: "flex", justifyContent: "center" }}>
             <Paper
               sx={{
-                backgroundColor: theme.palette.mode === "dark" ? theme.palette.grey[900] : "#ECECEC",
+                backgroundColor: isDark ? theme.palette.grey[900] : "#ECECEC",
                 maxWidth: 1050,
               }}
             >

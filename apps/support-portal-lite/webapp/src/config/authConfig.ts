@@ -46,9 +46,31 @@ declare global {
       SPL_APP_ADD_ESCALATION_GROUPS?: string[];
       SPL_APP_DOWNLOAD_ATTACHMENT_GROUPS?: string[];
       SPL_APP_USAGE_METRICS_GROUPS?: string[];
+      // Dev-only escape hatch — when true AND the bundle is a Vite dev
+      // build, AuthGuard treats the caller as signed in without ever calling
+      // Asgardeo. Ignored in production builds (see devBypassAuth below), so
+      // a stray true in a prod config.js can't disable auth. Same pattern as
+      // one-wso2's ONE_WSO2_DEV_BYPASS_AUTH.
+      SPL_APP_DEV_BYPASS_AUTH?: boolean;
+      // Dev-only companion to the bypass above: useAsgardeoGroups returns
+      // this list instead of decoding a token, since bypass mode never
+      // produces a real session to decode one from. Same "?: string[] falls
+      // off in prod" contract as SPL_APP_DEV_BYPASS_AUTH.
+      SPL_APP_DEV_BYPASS_GROUPS?: string[];
     };
   }
 }
+
+// Gate on import.meta.env.DEV so this constant folds to `false` in the
+// production bundle no matter what config.js says — same contract as
+// one-wso2's devBypassAuth.
+export const devBypassAuth: boolean =
+  import.meta.env.DEV && window.config?.SPL_APP_DEV_BYPASS_AUTH === true;
+
+export const devBypassGroups: string[] =
+  import.meta.env.DEV && Array.isArray(window.config?.SPL_APP_DEV_BYPASS_GROUPS)
+    ? window.config.SPL_APP_DEV_BYPASS_GROUPS
+    : [];
 
 interface AuthConfig {
   baseUrl: string;
@@ -72,6 +94,19 @@ function getAuthConfig(): AuthConfig {
   if (!signOutRedirectURL) missingVars.push("SPL_APP_AUTH_SIGN_OUT_REDIRECT_URL");
 
   if (missingVars.length > 0) {
+    // Under dev-bypass, AsgardeoProvider still mounts (AuthGuard just never
+    // lets it redirect anywhere — see AuthGuard.tsx) so it still needs SOME
+    // string values to initialize with, even ones that are never used for a
+    // real request.
+    if (devBypassAuth) {
+      return {
+        baseUrl: baseUrl ?? "https://dev.local/asgardeo",
+        clientId: clientId ?? "dev-mode-client",
+        signInRedirectURL: signInRedirectURL ?? "http://localhost:3002",
+        signOutRedirectURL: signOutRedirectURL ?? "http://localhost:3002",
+        scopes: ["openid", "email", "groups", "profile"],
+      };
+    }
     throw new Error(
       `Auth Config Error: Missing required configuration: ${missingVars.join(", ")}. Populate public/config.js from public/config.js.example.`,
     );

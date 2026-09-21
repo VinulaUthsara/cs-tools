@@ -44,6 +44,8 @@ import BarChart from "../components/CSBarChart";
 import CSPieChart from "../components/CSPieChart";
 import CSLineChart from "../components/CSLineChart";
 import type { CSReportDetailsResponse, ProjectDeployment } from "../api/reportTypes";
+import { ThemeProvider } from "@mui/material/styles";
+import { reportPaperTheme } from "../reportPaperTheme";
 import "../styles/CSReport.css";
 
 dayjs.extend(minMax);
@@ -345,6 +347,11 @@ export default function SplCsReportPage() {
         </Tooltip>
       </Box>
 
+      {/* A printable document (captured to PDF by handleDownloadPDF below) —
+          kept a fixed light "paper" theme regardless of the app's own
+          light/dark mode, same convention as SplSlaReportPage/
+          SplTimelogsReportPage. See reportPaperTheme.ts. */}
+      <ThemeProvider theme={reportPaperTheme}>
       <div id="cs-report">
         <div className="main-view-container">
           <h1 className="main-view-header">Customer Success Report for {csReportData?.subscriptionDetails?.projectName}</h1>
@@ -680,6 +687,7 @@ export default function SplCsReportPage() {
           </div>
         </div>
       </div>
+      </ThemeProvider>
     </>
   );
 

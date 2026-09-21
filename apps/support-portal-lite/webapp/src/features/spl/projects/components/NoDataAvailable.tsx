@@ -18,6 +18,7 @@
 // one-wso2's plain-MUI port), scoped locally to the projects domain — see
 // the note in ./DefaultTable.tsx.
 import { Box, Paper, Typography, useTheme } from "@wso2/oxygen-ui";
+import { useColorScheme } from "@mui/material/styles";
 import { InboxIcon } from "@wso2/oxygen-ui-icons-react";
 
 export default function NoDataAvailable({
@@ -28,13 +29,18 @@ export default function NoDataAvailable({
   description?: string;
 }) {
   const theme = useTheme();
+  // theme.palette.mode is not live under oxygen-ui's CSS-variables theme
+  // (extendTheme()) — confirmed empirically. useColorScheme() is the hook
+  // that actually tracks the live scheme.
+  const { mode: colorMode, systemMode } = useColorScheme();
+  const isDark = (colorMode === "system" ? systemMode : colorMode) === "dark";
 
   return (
     <Paper
       sx={{
         padding: 4,
         textAlign: "center",
-        backgroundColor: theme.palette.mode === "dark" ? theme.palette.grey[900] : theme.palette.grey[50],
+        backgroundColor: isDark ? theme.palette.grey[900] : theme.palette.grey[50],
         border: `1px dashed ${theme.palette.divider}`,
         minHeight: "200px",
         display: "flex",

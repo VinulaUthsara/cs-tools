@@ -32,7 +32,7 @@ import {
   TablePagination,
   TableRow,
 } from "@wso2/oxygen-ui";
-import { alpha, useTheme } from "@mui/material/styles";
+import { alpha, useTheme, useColorScheme } from "@mui/material/styles";
 import { ChevronsLeftIcon, ChevronsRightIcon, ChevronLeftIcon, ChevronRightIcon } from "@wso2/oxygen-ui-icons-react";
 import type { GetApiResponseError } from "@features/spl/api/useSplApi";
 import type { CaseDetailsWithCount, DataStruct } from "../api/splCaseTypes";
@@ -120,7 +120,11 @@ function PopulateTable({
   handleRowClick?: (rowData: DataStruct) => void;
 }) {
   const theme = useTheme();
-  const isDark = theme.palette.mode === "dark";
+  // theme.palette.mode is not live under oxygen-ui's CSS-variables theme
+  // (extendTheme()) — confirmed empirically. useColorScheme() is the hook
+  // that actually tracks the live scheme.
+  const { mode: colorMode, systemMode } = useColorScheme();
+  const isDark = (colorMode === "system" ? systemMode : colorMode) === "dark";
   // Warm-orange hover identity used throughout this domain (CaseStateCard,
   // SearchResultBox) — an alpha overlay composites correctly against either
   // mode's row background instead of a literal light-peach hex.

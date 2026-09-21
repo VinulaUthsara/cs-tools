@@ -14,7 +14,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-import { Box, Sidebar, Typography } from "@wso2/oxygen-ui";
+import { Box, ColorSchemeToggle, Sidebar, Typography } from "@wso2/oxygen-ui";
 import {
   LayersIcon,
   Building2Icon,
@@ -32,20 +32,50 @@ import { Outlet, matchPath, useLocation, useNavigate } from "react-router";
 // anchors, so the simpler Sidebar usage one-wso2's SideRail also falls back
 // to for a flat list is enough here.
 const NAV_ITEMS = [
-  { id: "cases", label: "Cases", icon: LayersIcon, path: "/cases" },
-  { id: "accounts", label: "Accounts", icon: Building2Icon, path: "/accounts" },
-  { id: "projects", label: "Projects", icon: FolderKanbanIcon, path: "/projects" },
-  { id: "team-schedule", label: "Team schedule", icon: CalendarClockIcon, path: "/team-schedule" },
-  { id: "user-scan", label: "User scan", icon: UserSearchIcon, path: "/user-scan" },
-  { id: "customer-health", label: "Customer health", icon: HeartPulseIcon, path: "/customer-health" },
-  { id: "usage-metrics", label: "Usage metrics", icon: BarChart3Icon, path: "/usage-metrics" },
+  { id: "cases", label: "Cases", icon: LayersIcon, path: "/cases", matchPaths: ["/cases"] },
+  {
+    id: "accounts",
+    label: "Accounts",
+    icon: Building2Icon,
+    // Navigates to the "all accounts" list — App.tsx has no bare "/accounts"
+    // route (it's "all-accounts"/"my-accounts"), so this row also has to
+    // match both of those, plus the account-detail routes nested under
+    // "/accounts/:accountId", to stay highlighted while on any of them.
+    path: "/all-accounts",
+    matchPaths: ["/all-accounts", "/my-accounts", "/accounts"],
+  },
+  { id: "projects", label: "Projects", icon: FolderKanbanIcon, path: "/projects", matchPaths: ["/projects"] },
+  {
+    id: "team-schedule",
+    label: "Team schedule",
+    icon: CalendarClockIcon,
+    path: "/team-schedule",
+    matchPaths: ["/team-schedule"],
+  },
+  { id: "user-scan", label: "User scan", icon: UserSearchIcon, path: "/user-scan", matchPaths: ["/user-scan"] },
+  {
+    id: "customer-health",
+    label: "Customer health",
+    icon: HeartPulseIcon,
+    path: "/customer-health",
+    matchPaths: ["/customer-health"],
+  },
+  {
+    id: "usage-metrics",
+    label: "Usage metrics",
+    icon: BarChart3Icon,
+    path: "/usage-metrics",
+    matchPaths: ["/usage-metrics"],
+  },
 ] as const;
 
 export default function AppLayout() {
   const location = useLocation();
   const navigate = useNavigate();
 
-  const activeItem = NAV_ITEMS.find((item) => matchPath(`${item.path}/*`, location.pathname))?.id;
+  const activeItem = NAV_ITEMS.find((item) =>
+    item.matchPaths.some((p) => matchPath(`${p}/*`, location.pathname)),
+  )?.id;
 
   return (
     <Box sx={{ display: "flex", minHeight: "100vh" }}>
@@ -68,8 +98,13 @@ export default function AppLayout() {
         </Sidebar.Nav>
       </Sidebar>
 
-      <Box component="main" sx={{ flex: 1, minWidth: 0, p: 3 }}>
-        <Outlet />
+      <Box component="main" sx={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
+        <Box sx={{ display: "flex", justifyContent: "flex-end", p: 1 }}>
+          <ColorSchemeToggle />
+        </Box>
+        <Box sx={{ flex: 1, minWidth: 0, px: 3, pb: 3 }}>
+          <Outlet />
+        </Box>
       </Box>
     </Box>
   );

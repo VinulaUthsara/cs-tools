@@ -17,7 +17,7 @@
 // Ported from the source app's components/CaseStateCard.tsx (via one-wso2's
 // plain-MUI port), rebuilt on @wso2/oxygen-ui.
 import { Card, CardActionArea, CardContent, CircularProgress, Typography } from "@wso2/oxygen-ui";
-import { alpha, useTheme } from "@mui/material/styles";
+import { alpha, useTheme, useColorScheme } from "@mui/material/styles";
 import { CircleAlertIcon } from "@wso2/oxygen-ui-icons-react";
 import type { GetApiResponseError } from "@features/spl/api/useSplApi";
 import type { CaseDetailsWithCount } from "../api/splCaseTypes";
@@ -38,6 +38,11 @@ export default function CaseStateCard({
   setCaseState: (state: string) => void;
 }) {
   const theme = useTheme();
+  // theme.palette.mode is not live under oxygen-ui's CSS-variables theme
+  // (extendTheme()) — confirmed empirically. useColorScheme() is the hook
+  // that actually tracks the live scheme.
+  const { mode: colorMode, systemMode } = useColorScheme();
+  const isDark = (colorMode === "system" ? systemMode : colorMode) === "dark";
 
   return (
     <Card
@@ -49,7 +54,7 @@ export default function CaseStateCard({
         // peach reads fine on a light card but washes out a dark one, so an
         // alpha overlay (which composites against whatever's underneath)
         // stands in for the literal hex the source app used.
-        "&:hover": { backgroundColor: alpha("#ff7300", theme.palette.mode === "dark" ? 0.24 : 0.35) },
+        "&:hover": { backgroundColor: alpha("#ff7300", isDark ? 0.24 : 0.35) },
         display: "flex",
         alignContent: "center",
       }}
