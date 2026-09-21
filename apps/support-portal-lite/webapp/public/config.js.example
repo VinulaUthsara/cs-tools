@@ -1,0 +1,42 @@
+// Template for public/config.js — copy to public/config.js and fill values.
+// This file is loaded at runtime by index.html BEFORE the React bundle, so
+// the same static bundle can serve any environment. Never commit the
+// filled-in config.js (see .gitignore).
+window.config = {
+  // Asgardeo OAuth — this app's own SPA registration. Not csm-portal's; each
+  // app needs its own client id even though they may share a tenant.
+  SPL_APP_AUTH_BASE_URL: "https://api.asgardeo.io/t/<your-org>",
+  SPL_APP_AUTH_CLIENT_ID: "<your-client-id>",
+  SPL_APP_AUTH_SIGN_IN_REDIRECT_URL: "http://localhost:3002",
+  SPL_APP_AUTH_SIGN_OUT_REDIRECT_URL: "http://localhost:3002",
+
+  // Where a Customer Success caller is sent — see useSplTeamGate. Required:
+  // without it, a CS caller who lands here sees SplLocked instead of being
+  // redirected to their own portal.
+  SPL_APP_CSM_PORTAL_URL: "<your-csm-portal-url>",
+
+  // Asgardeo group names distinguishing the two audiences. Empty/absent
+  // means nobody resolves to that team — see useSplTeamGate.
+  SPL_APP_CS_TEAM_GROUPS: ["customer-success-team"],
+  SPL_APP_SALES_TEAM_GROUPS: ["sales-team", "sales-engineering-team"],
+
+  // SupportPortalLite backend base URL (digiops-cs/apps/support-portal-lite).
+  // Optional — when absent, every screen falls back to mock data (see
+  // features/spl/api/splMockApi.ts).
+  // SPL_APP_BACKEND_BASE_URL: "<your-support-portal-lite-backend-url>",
+
+  // Fine-grained SupportPortalLite permission groups, ported verbatim from
+  // the source app's own group-list config — independent of the CS-vs-
+  // Sales/SA split above. Optional; empty/absent means nobody in that group.
+  SPL_APP_ADD_WORKNOTE_GROUPS: [],
+  SPL_APP_ADD_ESCALATION_GROUPS: [],
+  SPL_APP_DOWNLOAD_ATTACHMENT_GROUPS: [],
+  SPL_APP_USAGE_METRICS_GROUPS: [],
+
+  // Dev-only escape hatch — renders every route without calling Asgardeo.
+  // Useful when there's no real Sales/SA account to sign in with locally.
+  // Real client id above stays configured either way — flip this back to
+  // false to return to real sign-in.
+  // SPL_APP_DEV_BYPASS_AUTH: true,
+  // SPL_APP_DEV_BYPASS_GROUPS: ["sales-team"],
+};
