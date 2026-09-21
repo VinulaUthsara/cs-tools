@@ -21,6 +21,7 @@ import { AsgardeoProvider } from "@asgardeo/react";
 import { OxygenUIThemeProvider } from "@wso2/oxygen-ui";
 import App from "./App";
 import { authConfig } from "@config/authConfig";
+import { DEFAULT_THEME_KEY, THEME_OPTIONS } from "@config/themeConfig";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -48,7 +49,7 @@ export default function AppWithConfig(): JSX.Element {
         user: { fetchUserProfile: false, fetchOrganizations: false },
       }}
     >
-      <OxygenUIThemeProvider>
+      <OxygenUIThemeProvider themes={THEME_OPTIONS} initialTheme={DEFAULT_THEME_KEY}>
         <BrowserRouter>
           <QueryClientProvider client={queryClient}>
             <App />

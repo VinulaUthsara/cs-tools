@@ -15,6 +15,7 @@
 // under the License.
 
 import { Box, ColorSchemeToggle, Sidebar, Typography } from "@wso2/oxygen-ui";
+import ThemeSelect from "@components/ThemeSelect";
 import {
   LayersIcon,
   Building2Icon,
@@ -99,7 +100,8 @@ export default function AppLayout() {
       </Sidebar>
 
       <Box component="main" sx={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
-        <Box sx={{ display: "flex", justifyContent: "flex-end", p: 1 }}>
+        <Box sx={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 0.5, p: 1 }}>
+          <ThemeSelect />
           <ColorSchemeToggle />
         </Box>
         <Box sx={{ flex: 1, minWidth: 0, px: 3, pb: 3 }}>
