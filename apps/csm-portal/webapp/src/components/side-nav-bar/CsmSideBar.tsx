@@ -30,6 +30,7 @@ import {
   visibleNavSections,
 } from "@config/featureFlags";
 import { useNavTransition } from "@hooks/useNavTransition";
+import { useSplAccess } from "@features/spl/api/useSplAccess";
 
 /** Tooltip for a disabled WIP item. Includes the label so the collapsed rail
  *  (which hides the label) still says which feature it is. */
@@ -114,6 +115,11 @@ export default function CsmSideBar({
   const location = useLocation();
   const navigate = useNavTransition();
   const activeItem = pickActiveId(location.pathname);
+  // Audience gate for the "spl" section only — see useSplAccess.ts for why
+  // this is a client-side Asgardeo-groups check rather than this app's
+  // usual per-page feature-flag mechanism (visibleNavSections() below still
+  // applies that too; this is an additional filter on top of it).
+  const splAccess = useSplAccess();
   useEffect(() => {
     // The persisted id is the fallback used for routes with no owning section
     // (see `pickActiveId`'s doc comment) -- it must stay a *section* id.
@@ -184,8 +190,13 @@ export default function CsmSideBar({
       <Sidebar.Nav>
         <Sidebar.Category>
           {/* `hidden` sections are filtered out entirely; `wip` ones stay
-              rendered but disabled below. */}
-          {visibleNavSections().map((item) => {
+              rendered but disabled below. "spl" is additionally filtered by
+              the audience gate — while splAccess is still resolving
+              (!ready), it stays hidden rather than flashing in and then
+              disappearing. */}
+          {visibleNavSections()
+            .filter((item) => item.id !== "spl" || (splAccess.ready && splAccess.hasAccess))
+            .map((item) => {
             const itemContent = (
               <Sidebar.Item id={item.id}>
                 <Sidebar.ItemIcon>

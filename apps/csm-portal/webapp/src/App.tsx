@@ -102,6 +102,21 @@ import CsmTimeCardsPage from "@features/csm-timecards/pages/CsmTimeCardsPage";
 import CsmAnnouncementsPage from "@features/csm-announcements/pages/CsmAnnouncementsPage";
 import CsmAnnouncementCreatePage from "@features/csm-announcements/pages/CsmAnnouncementCreatePage";
 import HelpPage from "@features/help/pages/HelpPage";
+import SplRouteGuard from "@features/spl/pages/SplRouteGuard";
+import SplCasesPage from "@features/spl/cases/pages/SplCasesPage";
+import SplCaseDetailPage from "@features/spl/cases/pages/SplCaseDetailPage";
+import SplAccountsPage from "@features/spl/accounts/pages/SplAccountsPage";
+import SplAccountDetailPage from "@features/spl/accounts/pages/SplAccountDetailPage";
+import SplProjectsPage from "@features/spl/projects/pages/SplProjectsPage";
+import SplProjectDetailPage from "@features/spl/projects/pages/SplProjectDetailPage";
+import SplSlaReportPage from "@features/spl/reports/pages/SplSlaReportPage";
+import SplCsReportPage from "@features/spl/reports/pages/SplCsReportPage";
+import SplTimelogsReportPage from "@features/spl/reports/pages/SplTimelogsReportPage";
+import SplTeamSchedulePage from "@features/spl/schedule/pages/SplTeamSchedulePage";
+import SplUserScanPage from "@features/spl/user-scan/pages/SplUserScanPage";
+import SplCustomerHealthDashboardPage from "@features/spl/customer-health/pages/SplCustomerHealthDashboardPage";
+import SplCustomerHealthDetailPage from "@features/spl/customer-health/pages/SplCustomerHealthDetailPage";
+import SplUsageMetricsPage from "@features/spl/usage-metrics/pages/SplUsageMetricsPage";
 
 /**
  * Landing for `/`. Defers to AuthGuard's post-login deep-link restore when a
@@ -522,6 +537,63 @@ export default function App(): JSX.Element {
                       than its own route, so unlike Customers/Settings above
                       there is nothing to redirect an index route to. */}
                   <Route path="help" element={<HelpPage />} />
+
+                  {/* Support Portal Lite — ported from the former standalone
+                      apps/support-portal-lite/webapp. SplRouteGuard is the
+                      real enforcement point (an audience-gate 403, not just
+                      a hidden nav entry) and also mounts
+                      SplPermissionProvider for every screen below it. */}
+                  <Route path="spl" element={<SplRouteGuard />}>
+                    <Route path="cases" element={<SplCasesPage />} />
+                    <Route path="cases/:caseId" element={<SplCaseDetailPage />} />
+
+                    {/* SplAccountsPage reads the path leaf itself to decide
+                        all-accounts vs my-accounts — same component, two
+                        routes. Only "accounts" has a csmNavItems.ts entry;
+                        "my-accounts" is reachable from within the page
+                        itself (a toggle), same as the source app. */}
+                    <Route path="accounts" element={<SplAccountsPage />} />
+                    <Route path="my-accounts" element={<SplAccountsPage />} />
+                    <Route path="accounts/:accountId" element={<SplAccountDetailPage />} />
+
+                    <Route path="projects" element={<SplProjectsPage />} />
+                    {/* SplProjectDetailPage only reads :projectId — reachable
+                        both directly and nested under its account, matching
+                        both links the source app's own components use. */}
+                    <Route path="projects/:projectId" element={<SplProjectDetailPage />} />
+                    <Route
+                      path="accounts/:accountId/projects/:projectId"
+                      element={<SplProjectDetailPage />}
+                    />
+                    <Route
+                      path="projects/:projectId/sla-report/:sysId"
+                      element={<SplSlaReportPage />}
+                    />
+                    <Route
+                      path="projects/:projectId/cs-report/:sysId"
+                      element={<SplCsReportPage />}
+                    />
+                    <Route
+                      path="projects/:projectId/timelogs-report"
+                      element={<SplTimelogsReportPage />}
+                    />
+
+                    <Route path="team-schedule" element={<SplTeamSchedulePage />} />
+                    <Route path="team-schedule/:sysId" element={<SplTeamSchedulePage />} />
+
+                    <Route path="user-scan" element={<SplUserScanPage />} />
+
+                    <Route
+                      path="customer-health"
+                      element={<SplCustomerHealthDashboardPage />}
+                    />
+                    <Route
+                      path="customer-health/account/:accountId"
+                      element={<SplCustomerHealthDetailPage />}
+                    />
+
+                    <Route path="usage-metrics" element={<SplUsageMetricsPage />} />
+                  </Route>
                 </Route>
               </Route>
 

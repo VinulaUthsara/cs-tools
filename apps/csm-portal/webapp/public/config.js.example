@@ -101,4 +101,14 @@ window.config = {
   // CSM_PORTAL_MOBILE_APP_ANDROID_STORE_URL: "https://play.google.com/store/apps/details?id=com.example.app",
   // Also show the banner on tablets, not just phones (default false).
   // CSM_PORTAL_MOBILE_APP_INCLUDE_TABLETS: false,
+
+  // SPL (Support Portal Lite) section — ported from the former standalone
+  // apps/support-portal-lite/webapp, now served by this app against the
+  // same CSM_PORTAL_BACKEND_BASE_URL above (its /spl/* routes). Empty/unset
+  // group lists below mean nobody sees the section / has the action.
+  // CSM_PORTAL_SPL_AUDIENCE_GROUPS: ["sales-team", "sales-engineering-team"],
+  // CSM_PORTAL_SPL_ADD_WORKNOTE_GROUPS: [],
+  // CSM_PORTAL_SPL_ADD_ESCALATION_GROUPS: [],
+  // CSM_PORTAL_SPL_DOWNLOAD_ATTACHMENT_GROUPS: [],
+  // CSM_PORTAL_SPL_USAGE_METRICS_GROUPS: [],
 };

@@ -17,23 +17,29 @@
 import {
   AlertOctagon,
   AlertTriangle,
+  BarChart3,
   Briefcase,
   Bug,
   Building2,
+  CalendarClock,
   ChartColumn,
   Clock,
   ClipboardList,
   Cog,
   FileWarning,
+  FolderKanban,
   GitPullRequest,
   Headset,
+  HeartPulse,
   KeyRound,
+  Layers,
   LifeBuoy,
   Megaphone,
   RefreshCw,
   Settings,
   Shield,
   UserCog,
+  UserSearch,
   Users,
   UsersRound,
 } from "@wso2/oxygen-ui-icons-react";
@@ -325,6 +331,44 @@ export const CSM_NAV_ITEMS: CsmNavSection[] = [
         href: "/help#people-access",
       },
       { id: "help.settings", label: "Settings", href: "/help#settings" },
+    ],
+  },
+  // Support Portal Lite — Sales/Solutions-Architecture staff only, ported
+  // from the former standalone apps/support-portal-lite/webapp. Visibility
+  // is gated by useSplAccess (client-side Asgardeo groups), NOT this app's
+  // usual per-page feature-flag/roles mechanism — see CsmSideBar.tsx and
+  // App.tsx's SplRouteGuard for where that check actually happens; this
+  // section still exists in the tree unconditionally so
+  // CSM_PORTAL_FEATURE_OVERRIDES' WIP/hidden mechanism works on it too, on
+  // top of the audience gate.
+  {
+    id: "spl",
+    label: "Support Portal Lite",
+    href: "/spl/cases",
+    icon: Layers,
+    children: [
+      { id: "spl.cases", label: "Cases", href: "/spl/cases" },
+      { id: "spl.accounts", label: "Accounts", href: "/spl/accounts", icon: Building2 },
+      { id: "spl.projects", label: "Projects", href: "/spl/projects", icon: FolderKanban },
+      {
+        id: "spl.team-schedule",
+        label: "Team schedule",
+        href: "/spl/team-schedule",
+        icon: CalendarClock,
+      },
+      { id: "spl.user-scan", label: "User scan", href: "/spl/user-scan", icon: UserSearch },
+      {
+        id: "spl.customer-health",
+        label: "Customer health",
+        href: "/spl/customer-health",
+        icon: HeartPulse,
+      },
+      {
+        id: "spl.usage-metrics",
+        label: "Usage metrics",
+        href: "/spl/usage-metrics",
+        icon: BarChart3,
+      },
     ],
   },
 ];
