@@ -38,6 +38,12 @@ import (
 var testUser = &middleware.UserInfo{
 	Email:  "agent@example.com",
 	UserID: "f2d9bf5b-7067-43dc-8578-802c8623af5d",
+	// Groups is only consumed by the /spl/* (SupportPortalLite) handlers'
+	// requireSPLGroups — see middleware.UserInfo.Groups's own doc comment
+	// for why this app still carries it alongside the newer Roles-based
+	// model. Restored here after a merge with dev-app-csm-portal silently
+	// dropped it (dev's UserInfo had no Groups field at merge time).
+	Groups: []string{"csm-agents"},
 }
 
 // testPlatformUserID is the id GET /users/me resolves for testUser: the
