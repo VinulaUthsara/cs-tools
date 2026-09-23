@@ -23,15 +23,30 @@
 const ADMIN_ROLE_KEY = "admin";
 
 /**
- * True when the given `GET /users/me` roles include the platform admin
- * role. Frontend-only gate for the dashboard builder (see
- * `csmNavItems.ts`'s own comment on `admin.dashboards`): unlike every other
- * `/admin` tab, this one has no privileged backend action to fall back on
- * for enforcement — everything the builder does is local to the browser
- * (`localStorage` only), so hiding it here IS the whole gate. Every other
- * `/admin` page deliberately does NOT do this (see App.tsx), so don't reuse
- * this helper to gate anything else without re-checking that reasoning.
+ * A narrower, dashboard-builder-only role key. The backend includes this in
+ * `GET /users/me`'s `roles` for users whose token carries the configured
+ * dashboard-designer role (`AUTH_DASHBOARD_DESIGNER_ROLES`), alongside
+ * whatever other roles they hold — this lets specific non-admin users
+ * design dashboards without granting them the full `admin` role. Matched
+ * case-insensitively, same as `ADMIN_ROLE_KEY`.
+ */
+const DASHBOARD_DESIGNER_ROLE_KEY = "dashboard_designer";
+
+/**
+ * True when the given `GET /users/me` roles grant dashboard-builder access:
+ * either the full platform `admin` role, or the narrower `dashboard_designer`
+ * role (granted per user by the backend for dashboard-only access). Frontend
+ * -only gate for the dashboard builder (see `csmNavItems.ts`'s own comment
+ * on `admin.dashboards`): unlike every other `/admin` tab, this one has no
+ * privileged backend action to fall back on for enforcement — everything
+ * the builder does is local to the browser (`localStorage` only), so hiding
+ * it here IS the whole gate. Every other `/admin` page deliberately does
+ * NOT do this (see App.tsx), so don't reuse this helper to gate anything
+ * else without re-checking that reasoning.
  */
 export function hasDashboardBuilderAccess(roles: string[] | undefined): boolean {
-  return (roles ?? []).some((r) => r.toLowerCase() === ADMIN_ROLE_KEY);
+  return (roles ?? []).some((r) => {
+    const lower = r.toLowerCase();
+    return lower === ADMIN_ROLE_KEY || lower === DASHBOARD_DESIGNER_ROLE_KEY;
+  });
 }

@@ -21,6 +21,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
@@ -32,6 +33,7 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
+	"github.com/wso2-open-operations/cs-tools/integrations/csm-notification-service/internal/apierror"
 	"github.com/wso2-open-operations/cs-tools/integrations/csm-notification-service/internal/dispatch"
 	"github.com/wso2-open-operations/cs-tools/integrations/csm-notification-service/internal/entity"
 	"github.com/wso2-open-operations/cs-tools/integrations/csm-notification-service/internal/eventbus"
@@ -39,6 +41,7 @@ import (
 	"github.com/wso2-open-operations/cs-tools/integrations/csm-notification-service/internal/notifications"
 	"github.com/wso2-open-operations/cs-tools/integrations/csm-notification-service/internal/recipientlinks"
 	"github.com/wso2-open-operations/cs-tools/integrations/csm-notification-service/internal/slaengine"
+	"github.com/wso2-open-operations/cs-tools/integrations/csm-notification-service/internal/timecardengine"
 )
 
 func main() {
@@ -156,10 +159,34 @@ func main() {
 	dlqProducer := eventbus.NewProducer(dlqCfg)
 	defer dlqProducer.Close()
 
+	// The change-request notices ride their own topic, not case-events.
+	// A consumer group reads its whole topic, so sharing one would make this
+	// service's case consumer read and discard every change-request record
+	// and the change-request consumer read and discard every case one --
+	// a separate group isolates processing, only a separate topic isolates
+	// volume. entity-service publishes here (CR_EVENT_HUB_TOPIC there).
+	crCfg := eventbus.Config{
+		Broker:           eventBusCfg.Broker,
+		ConnectionString: eventBusCfg.ConnectionString,
+		Topic:            envOrDefault("CR_EVENT_HUB_TOPIC", "cr-events"),
+	}
+	crDLQCfg := eventbus.Config{
+		Broker:           eventBusCfg.Broker,
+		ConnectionString: eventBusCfg.ConnectionString,
+		Topic:            envOrDefault("CR_EVENT_HUB_DLQ_TOPIC", "cr-events-dlq"),
+	}
+
+	crDLQProducer := eventbus.NewProducer(crDLQCfg)
+	defer crDLQProducer.Close()
+
 	consumerGroup := envOrDefault("EVENT_HUB_CONSUMER_GROUP", "csm-notification-service")
 	dlqConsumerGroup := envOrDefault("EVENT_HUB_DLQ_CONSUMER_GROUP", "csm-notification-service-dlq")
 	mainConsumerCount := envInt("MAIN_CONSUMER_COUNT", 1)
 	dlqConsumerCount := envInt("DLQ_CONSUMER_COUNT", 1)
+	crConsumerGroup := envOrDefault("CR_CONSUMER_GROUP", "csm-notification-service-cr")
+	crDLQConsumerGroup := envOrDefault("CR_DLQ_CONSUMER_GROUP", "csm-notification-service-cr-dlq")
+	crConsumerCount := envInt("CR_CONSUMER_COUNT", 1)
+	crDLQConsumerCount := envInt("CR_DLQ_CONSUMER_COUNT", 1)
 
 	// EMAIL_DEBUG_MODE redirects the four case.* types' actual email delivery
 	// to EMAIL_DEBUG_RECIPIENTS instead of each event's real resolved
@@ -182,6 +209,14 @@ func main() {
 	// while investigating a delivery issue without also having to stop
 	// exercising the rest of the pipeline (link resolution, Chat, Twilio).
 	emailSendingEnabled := os.Getenv("EMAIL_SENDING_ENABLED") != "false"
+	// A customer-audience notice puts the recipients in BCC and uses the from
+	// address as the only To, so an unset EMAIL_FROM_ADDRESS submits [""] to
+	// the email service rather than failing here. Required whenever sending is
+	// on, which every real deployment already satisfies.
+	if emailSendingEnabled && strings.TrimSpace(os.Getenv("EMAIL_FROM_ADDRESS")) == "" {
+		slog.Error("EMAIL_FROM_ADDRESS is required when EMAIL_SENDING_ENABLED is not \"false\"")
+		os.Exit(1)
+	}
 	if !emailSendingEnabled {
 		slog.Warn("EMAIL_SENDING_ENABLED=false; case.* emails will be logged, not sent")
 	}
@@ -212,10 +247,21 @@ func main() {
 	// deliberately no third tier past the DLQ; see handleAttempts' doc
 	// comment in eventbus/consumer.go.
 	toDeadLetter := func(ctx context.Context, record eventbus.Record, handleErr error) error {
+		attrs := []any{"topic", record.Topic, "partition", record.Partition,
+			"offset", record.Offset, "dlqTopic", dlqCfg.Topic}
 		slog.WarnContext(ctx, "eventbus: handler exhausted retries, publishing to dead-letter topic",
-			"topic", record.Topic, "partition", record.Partition, "offset", record.Offset,
-			"dlqTopic", dlqCfg.Topic, "err", handleErr)
+			append(attrs, deadLetterErrAttrs(handleErr)...)...)
 		return dlqProducer.Publish(ctx, record.Key, record.Value)
+	}
+
+	// The change-request consumer dead-letters to its own topic, so a stuck
+	// change-request record cannot fill the case DLQ (and the reverse).
+	crToDeadLetter := func(ctx context.Context, record eventbus.Record, handleErr error) error {
+		attrs := []any{"topic", record.Topic, "partition", record.Partition,
+			"offset", record.Offset, "dlqTopic", crDLQCfg.Topic}
+		slog.WarnContext(ctx, "eventbus: handler exhausted retries, publishing to dead-letter topic",
+			append(attrs, deadLetterErrAttrs(handleErr)...)...)
+		return crDLQProducer.Publish(ctx, record.Key, record.Value)
 	}
 
 	mux := http.NewServeMux()
@@ -260,12 +306,23 @@ func main() {
 
 	mainConsumers := startConsumers(ctx, "main", eventBusCfg, consumerGroup, mainConsumerCount, dispatcher.Handle, toDeadLetter)
 	dlqConsumers := startConsumers(ctx, "dlq", dlqCfg, dlqConsumerGroup, dlqConsumerCount, dispatcher.Handle, nil)
+	// Same dispatcher as the case consumers: it already routes on the
+	// envelope's Type, and these two only ever receive change_request.* since
+	// that is all their topic carries.
+	crConsumers := startConsumers(ctx, "cr", crCfg, crConsumerGroup, crConsumerCount, dispatcher.Handle, crToDeadLetter)
+	crDLQConsumers := startConsumers(ctx, "cr-dlq", crDLQCfg, crDLQConsumerGroup, crDLQConsumerCount, dispatcher.Handle, nil)
 
-	// The SLA timer engine is optional per deployment, gated on REDIS_ADDR or
-	// REDIS_URL being set — unset means this engine neither consumes
-	// sla.clock.register nor ticks, matching the "unset means don't run"
-	// convention used elsewhere in this repo's own services for an optional
-	// capability (e.g. apps/csm-portal/backend's EVENT_HUB_BROKER gate).
+	// The SLA breach-alerting engine is optional per deployment, gated on
+	// REDIS_ADDR or REDIS_URL being set — unset means this engine never
+	// polls, matching the "unset means don't run" convention used elsewhere
+	// in this repo's own services for an optional capability (e.g.
+	// apps/csm-portal/backend's EVENT_HUB_BROKER gate). Unlike the design
+	// this replaced, it is no longer a Kafka consumer at all — see
+	// internal/slaengine's own CLAUDE.md section ("SLA breach alerting")
+	// for the full redesign: it polls entity-service's GET /sla-status
+	// (backed by the real, ServiceNow-synced "sla" table, not a value this
+	// service used to compute itself) on a plain ticker instead.
+	//
 	// REDIS_URL (a rediss://:<password>@<host>:<port> connection string,
 	// parsed via redis.ParseURL) is how a managed Redis with TLS — Azure
 	// Managed Redis, Azure Cache for Redis — gets configured: the "rediss"
@@ -283,11 +340,10 @@ func main() {
 	// to follow MOVED/ASK redirects, which nothing here constructs. Confirm
 	// the target Redis resource's clustering policy is Enterprise/
 	// non-clustered before pointing REDIS_URL at it; OSS Cluster policy will
-	// fail unpredictably (WakeIndex's ZSET operations landing on the wrong
+	// fail unpredictably (TierStore's key operations landing on the wrong
 	// shard) rather than at this construction site.
 	var redisClient *redis.Client
 	var slaProducer *eventbus.Producer
-	var slaConsumers []*eventbus.Consumer
 	redisURL := os.Getenv("REDIS_URL")
 	redisAddr := os.Getenv("REDIS_ADDR")
 	if redisURL != "" || redisAddr != "" {
@@ -323,9 +379,7 @@ func main() {
 		// warns-and-degrades on a missing config), mustEnv is used for all
 		// four values here: once REDIS_ADDR opts into this engine, every one
 		// of them is required for it to do anything at all — a missing
-		// credential would otherwise silently fail every entity-service call
-		// this engine makes, with each sla.clock.register record retried and
-		// dead-lettered for a reason invisible from the DLQ topic alone.
+		// credential would otherwise silently fail every poll.
 		slaEntityClient := slaengine.NewEntityClient(slaengine.EntityConfig{
 			BaseURL:      mustEnv("CUSTOMER_ENTITY_BASE_URL"),
 			TokenURL:     mustEnv("OAUTH2_TOKEN_URL"),
@@ -341,15 +395,33 @@ func main() {
 		// exists.
 		slaProducer = eventbus.NewProducer(eventBusCfg)
 
-		slaEngine := slaengine.NewEngine(slaEntityClient, slaengine.NewWakeIndex(redisClient), slaProducer)
+		slaEngine := slaengine.NewEngine(slaEntityClient, slaengine.NewTierStore(redisClient), slaProducer, googleChatClient, linkResolver, defaultChatProduct)
 
-		slaConsumerGroup := envOrDefault("SLA_CONSUMER_GROUP", "csm-notification-service-sla")
-		slaConsumerCount := envInt("SLA_CONSUMER_COUNT", 1)
-		slaConsumers = startConsumers(ctx, "sla", eventBusCfg, slaConsumerGroup, slaConsumerCount, slaEngine.Handle, toDeadLetter)
-
-		tickInterval := envDuration("SLA_TICK_INTERVAL", 15*time.Second)
+		// SLA_TICK_INTERVAL defaults far above the old wake-index engine's
+		// 15s: that interval made sense for firing a precomputed due date
+		// close to when it actually elapsed, but this engine now polls
+		// entity-service directly every tick (paginating through every
+		// active clock, ~5,500 as of this redesign) and only needs to
+		// notice a newly-crossed 50/75/100% checkpoint, not a specific
+		// instant — most active "sla" rows don't change more than a few
+		// times a day. 5 minutes balances alert latency against load on
+		// entity-service and Redis.
+		tickInterval := envDuration("SLA_TICK_INTERVAL", 5*time.Minute)
 		go slaEngine.RunTicker(ctx, tickInterval)
 	}
+
+	// timecardengine has no Redis/state dependency at all (unlike slaEngine
+	// above) — it's a plain Kafka consumer, so it's started unconditionally,
+	// not gated behind the REDIS_URL/REDIS_ADDR check. Its own dedicated
+	// consumer group, not dispatcher's — see that package's own doc comment
+	// for why. Its Handle is currently log-only (see the package doc
+	// comment): entity-service's own Publish call for events.
+	// TypeCaseBillableStatusChanged is itself still commented out, so this
+	// consumer group exists ahead of having anything to actually do yet.
+	timeCardEngine := timecardengine.NewEngine()
+	timeCardConsumerGroup := envOrDefault("TIME_CARD_CONSUMER_GROUP", "csm-notification-service-time-card")
+	timeCardConsumerCount := envInt("TIME_CARD_CONSUMER_COUNT", 1)
+	timeCardConsumers := startConsumers(ctx, "time-card", eventBusCfg, timeCardConsumerGroup, timeCardConsumerCount, timeCardEngine.Handle, toDeadLetter)
 
 	<-ctx.Done()
 	stop()
@@ -360,7 +432,13 @@ func main() {
 	for _, c := range dlqConsumers {
 		c.Close()
 	}
-	for _, c := range slaConsumers {
+	for _, c := range crConsumers {
+		c.Close()
+	}
+	for _, c := range crDLQConsumers {
+		c.Close()
+	}
+	for _, c := range timeCardConsumers {
 		c.Close()
 	}
 	if slaProducer != nil {
@@ -542,4 +620,17 @@ func parseGoogleChatSpaces(raw string) []notifications.GoogleChatSpace {
 		return nil
 	}
 	return spaces
+}
+
+// deadLetterErrAttrs describes a handler failure without reproducing it. An
+// upstream failure arrives as *apierror.Error, whose Error() embeds up to 256
+// bytes of the response body -- which can carry recipient addresses or other
+// content this service is not allowed to log (see CLAUDE.md). The status code
+// and error type are enough to find the failure upstream.
+func deadLetterErrAttrs(err error) []any {
+	var apiErr *apierror.Error
+	if errors.As(err, &apiErr) {
+		return []any{"errKind", "upstream", "status", apiErr.StatusCode}
+	}
+	return []any{"errKind", fmt.Sprintf("%T", err)}
 }

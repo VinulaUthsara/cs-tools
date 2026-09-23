@@ -324,3 +324,165 @@ export function collapseEmptyParagraphElements(dom: Document): boolean {
 
   return changed;
 }
+
+/**
+ * Removes the `white-space: pre-wrap` inline style that Lexical's default
+ * `TextNode.exportDOM()` adds to the exported element of *every* text run
+ * (`node_modules/lexical/Lexical.dev.mjs`: `element.style.whiteSpace =
+ * 'pre-wrap'`, set unconditionally before any format-specific wrapping).
+ * Then unwraps any `<span>` left with no remaining attributes -- a plain
+ * text run has no other reason to be wrapped in a span once that style is
+ * gone.
+ *
+ * Per digiops-cs#2933: this HTML is only ever read by renderers we control
+ * (CSM Portal, Customer Portal), both via `dangerouslySetInnerHTML` in
+ * components we own -- Lexical's own source comment says the per-span style
+ * exists "for headless mode where people might use Lexical to generate HTML
+ * content and not have the ability to use CSS classes," which doesn't apply
+ * here. The same guarantee (don't collapse multiple consecutive spaces the
+ * user typed) is declared once on the render container's own CSS instead.
+ *
+ * IMPORTANT -- this is an unconditional strip, unlike
+ * {@link unwrapNestedPreCodeElements} and friends: it is only safe to call
+ * this on the generation side once *every* consumer that renders this HTML
+ * declares `white-space: pre-wrap` on its own container CSS. A consumer that
+ * doesn't will silently collapse multi-space runs and leading/trailing
+ * spaces in newly generated comments. See digiops-cs#2933 for the full
+ * rollout requirement across both apps.
+ */
+export function stripWhitespaceStyleAndUnwrapSpans(dom: Document): boolean {
+  const body = dom.body;
+  if (!body) return false;
+
+  let changed = false;
+  for (const el of Array.from(body.querySelectorAll<HTMLElement>("[style]"))) {
+    if (!el.style.whiteSpace) continue;
+    el.style.removeProperty("white-space");
+    if (el.getAttribute("style") === "") {
+      el.removeAttribute("style");
+    }
+    changed = true;
+
+    if (el.tagName === "SPAN" && el.attributes.length === 0) {
+      el.replaceWith(...Array.from(el.childNodes));
+    }
+  }
+
+  return changed;
+}
+
+/**
+ * String-level convenience wrapper around
+ * {@link stripWhitespaceStyleAndUnwrapSpans} for the composer's
+ * HTML-generation path, which only has the serialized
+ * `$generateHtmlFromNodes` output, not a `Document`.
+ */
+export function stripWhitespaceStyleFromHtml(html: string): string {
+  if (!html.includes("white-space")) return html;
+
+  const dom = new DOMParser().parseFromString(html, "text/html");
+  if (!stripWhitespaceStyleAndUnwrapSpans(dom)) return html;
+
+  return dom.body.innerHTML;
+}
+
+/**
+ * The exact presentational properties `@lexical/table`'s own `TableCellNode`/
+ * `TableNode.exportDOM()` unconditionally bake into every cell on export --
+ * see `stripLexicalTableStylingFromHtml`'s own doc comment. Removed by
+ * property name, not by clearing the whole `style` attribute, so a
+ * declaration the *user* typed by hand in HTML-source mode (e.g. `color:
+ * red` on one cell) survives a source-mode round trip instead of being
+ * wiped out alongside Lexical's own junk.
+ */
+const LEXICAL_TABLE_CELL_STYLE_PROPERTIES = new Set([
+  "width",
+  "border",
+  "vertical-align",
+  "text-align",
+  "background-color",
+]);
+
+/**
+ * Removes exactly the declarations in
+ * {@link LEXICAL_TABLE_CELL_STYLE_PROPERTIES} from a raw `style` attribute
+ * string, keeping every other declaration untouched -- including one whose
+ * property CSSOM would otherwise expand a shorthand like `border` into
+ * (`border-width`/`border-style`/`border-color`/`border-top`/etc). Operating
+ * on the attribute's own text instead of `element.style` deliberately
+ * sidesteps that expansion: jsdom (and some browsers) normalize `border: 1px
+ * solid black` into its longhand components -- or, once those longhands are
+ * themselves removed, into yet another equivalent grouping (`border-top`/
+ * `border-right`/...) -- on the very first read of `element.style`, so
+ * chasing it one property at a time via `removeProperty` never converges.
+ * Matching the literal property name Lexical's own `exportDOM` writes,
+ * before any such normalization happens, avoids the whole problem.
+ */
+function stripLexicalStyleDeclarations(styleAttr: string): string {
+  return styleAttr
+    .split(";")
+    .map((decl) => decl.trim())
+    .filter((decl) => {
+      if (!decl) return false;
+      const propName = decl.slice(0, decl.indexOf(":")).trim().toLowerCase();
+      return !LEXICAL_TABLE_CELL_STYLE_PROPERTIES.has(propName);
+    })
+    .join("; ");
+}
+
+/**
+ * Strips every presentational bit `@lexical/table`'s own `TableCellNode`/
+ * `TableNode.exportDOM()` unconditionally bakes into a table on export: a
+ * fixed per-cell `style="width: …px"` (its own `COLUMN_WIDTH` constant, 75,
+ * whenever a cell carries no explicit width of its own -- true for every
+ * table this editor produces, since nothing here exposes a column-resize
+ * control), plus `border`/`vertical-align`/`text-align`/header
+ * `background-color`, and the `<colgroup>`'s own `<col style="width:...">`
+ * entries (a second, independent width constraint on top of the per-cell
+ * one). Left in, that inline styling always wins over every consumer's own
+ * table CSS (inline beats a stylesheet rule short of `!important`), so a
+ * table submitted from this editor renders as a cramped, heavily-wrapped
+ * ~75px-per-column grid everywhere else it's displayed -- the CSM portal's
+ * own read view, the separate customer portal -- no matter how wide its
+ * actual content is. This has to run at generation time, on the HTML that
+ * actually gets submitted, because none of those other renderers can be
+ * patched from here -- the live composing view's own CSS override
+ * (`Editor.tsx`'s `!important` rule) only reaches this one screen.
+ *
+ * Removes only the specific properties in
+ * {@link LEXICAL_TABLE_CELL_STYLE_PROPERTIES} above, not the whole `style`
+ * attribute -- a table typed by hand in HTML-source mode can carry its own
+ * deliberate styling (e.g. a highlighted cell's `background-color`, though
+ * that particular property collides with Lexical's own header shading; a
+ * safer example is `color`), which must survive toggling back to rich mode
+ * and re-exporting, not just Lexical's own injected defaults.
+ */
+export function stripLexicalTableStylingFromHtml(html: string): string {
+  if (!html.includes("<table")) return html;
+
+  const dom = new DOMParser().parseFromString(html, "text/html");
+  const body = dom.body;
+  if (!body) return html;
+
+  let changed = false;
+  for (const colgroup of Array.from(body.querySelectorAll("table > colgroup"))) {
+    colgroup.remove();
+    changed = true;
+  }
+  for (const el of Array.from(
+    body.querySelectorAll<HTMLElement>("table, table th, table td"),
+  )) {
+    const styleAttr = el.getAttribute("style");
+    if (!styleAttr) continue;
+    const kept = stripLexicalStyleDeclarations(styleAttr);
+    if (kept === styleAttr) continue;
+    changed = true;
+    if (kept) {
+      el.setAttribute("style", kept);
+    } else {
+      el.removeAttribute("style");
+    }
+  }
+
+  return changed ? body.innerHTML : html;
+}

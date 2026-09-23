@@ -121,6 +121,9 @@ type CaseHandler struct {
 	// CreateCaseComment's behavior completely unchanged from before this
 	// feature existed.
 	inlineImages *InlineImageProcessor
+	// engineering, when non-nil, files GitHub issues from a case instead of
+	// the entity service — see WithEngineeringClient.
+	engineering engineeringGitIssueClient
 }
 
 // NewCaseHandler creates a CaseHandler backed by the given entity client.
@@ -383,12 +386,6 @@ func (h *CaseHandler) CreateCase(w http.ResponseWriter, r *http.Request) {
 
 // CreateCaseComment handles POST /cases/{id}/comments.
 // createdBy is resolved by the entity service from the forwarded x-user-id-token.
-// The request body (including an optional mentionedUserIds — see
-// CaseCommentCreatePayload in openapi.yaml) is forwarded to the entity
-// service verbatim; this handler has no typed request DTO for the comment
-// payload itself, so a new passthrough field needs no BFF struct change,
-// only inline-image handling above preserves unknown fields via
-// map[string]json.RawMessage — see processCommentInlineImages.
 func (h *CaseHandler) CreateCaseComment(w http.ResponseWriter, r *http.Request) {
 	user := middleware.UserInfoFromContext(r.Context())
 	if user == nil {
@@ -1701,6 +1698,11 @@ func (h *CaseHandler) CreateCaseGithubIssue(w http.ResponseWriter, r *http.Reque
 
 	if !json.Valid(body) {
 		writeError(w, http.StatusBadRequest, ErrMsgBadRequest)
+		return
+	}
+
+	if h.engineering != nil {
+		h.createGitHubIssueViaEngineering(w, r, user, caseID, body)
 		return
 	}
 

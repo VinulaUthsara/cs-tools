@@ -63,7 +63,7 @@ import {
 import { Link as RouterLink } from "react-router";
 import { formatBytes } from "@utils/formatBytes";
 import DirectoryEntityChip from "@features/csm-admin/components/DirectoryEntityChip";
-import { useSearchUsersByName } from "@api/useSearchUsersByName";
+import { useSearchInternalUsersByName } from "@api/useSearchUsersByName";
 import { userLabel } from "@features/csm-operations/utils/incidentFormOptions";
 import AttachmentPreviewDialog from "@features/csm-cases/components/AttachmentPreviewDialog";
 import {
@@ -897,8 +897,8 @@ export function WatchersWidget({
             value=""
             onChange={addWatcher}
             disabled={isSaving}
-            useSearch={useSearchUsersByName}
-            // useSearchUsersByName drops any user without an id, so every
+            useSearch={useSearchInternalUsersByName}
+            // useSearchInternalUsersByName drops any user without an id, so every
             // option here is guaranteed to have one.
             getId={(u) => u.id!}
             getLabel={userLabel}
@@ -1124,15 +1124,25 @@ export function AttachmentsWidget({
                   : "Upload"}
               </Button>
             )}
-            <Button
-              size="small"
-              variant="text"
-              startIcon={<Download size={14} />}
-              onClick={onDownloadAll}
-              disabled={sorted.length === 0}
+            <Tooltip
+              title={
+                onDownloadAll
+                  ? ""
+                  : "You don't have permission to download attachments."
+              }
             >
-              Download all
-            </Button>
+              <Box component="span">
+                <Button
+                  size="small"
+                  variant="text"
+                  startIcon={<Download size={14} />}
+                  onClick={onDownloadAll}
+                  disabled={!onDownloadAll || sorted.length === 0}
+                >
+                  Download all
+                </Button>
+              </Box>
+            </Tooltip>
           </Box>
         }
       >
@@ -1248,16 +1258,26 @@ export function AttachmentsWidget({
                       Preview
                     </Button>
                   )}
-                <Button
-                  size="small"
-                  variant="outlined"
-                  startIcon={<Download size={14} />}
-                  onClick={() => onDownload?.(a)}
-                  aria-label={`Download ${a.filename}`}
-                  sx={{ flexShrink: 0 }}
+                <Tooltip
+                  title={
+                    onDownload
+                      ? ""
+                      : "You don't have permission to download attachments."
+                  }
                 >
-                  Download
-                </Button>
+                  <Box component="span" sx={{ flexShrink: 0 }}>
+                    <Button
+                      size="small"
+                      variant="outlined"
+                      startIcon={<Download size={14} />}
+                      onClick={() => onDownload?.(a)}
+                      disabled={!onDownload}
+                      aria-label={`Download ${a.filename}`}
+                    >
+                      Download
+                    </Button>
+                  </Box>
+                </Tooltip>
                 {onDelete && (
                   <IconButton
                     size="small"

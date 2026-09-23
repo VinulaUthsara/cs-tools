@@ -102,6 +102,10 @@ type snChangeRequestFilters struct {
 	// ("approval" field). ServiceNow's raw task.approval value, passed
 	// through as-is -- not a key/enum mapping.
 	Approval string `json:"approval,omitempty"`
+	// AssignedUserIDs: sys_user sys_ids (converted from UUIDs). Wire key is
+	// plural "assignedUserIds" to match Ballerina/SN's contract, even though
+	// the domain-facing filter field is singular "assignedUserId".
+	AssignedUserIDs []string `json:"assignedUserIds,omitempty"`
 }
 
 // snCRTypeIDMap maps domain ChangeRequestType enums to SN numeric type IDs.
@@ -327,6 +331,7 @@ func (s *snChangeRequestService) SearchChangeRequests(ctx context.Context, req d
 			CreatedEndDate:     formatSNDateTimeUTC(parsedFilters.CreatedEndDate),
 			AssignmentGroupIDs: uuidsToSysids(parsedFilters.AssignmentGroupIDs),
 			Approval:           stringPtrValue(parsedFilters.Approval),
+			AssignedUserIDs:    uuidsToSysids(parsedFilters.AssignedUserIDs),
 		},
 		SortBy:     snSortBy,
 		Pagination: snProjectPagination{Limit: req.Pagination.Limit, Offset: req.Pagination.Offset},
@@ -472,6 +477,7 @@ func (s *snChangeRequestService) AggregateChangeRequests(ctx context.Context, re
 			CreatedEndDate:     formatSNDateTimeUTC(parsedFilters.CreatedEndDate),
 			AssignmentGroupIDs: uuidsToSysids(parsedFilters.AssignmentGroupIDs),
 			Approval:           stringPtrValue(parsedFilters.Approval),
+			AssignedUserIDs:    uuidsToSysids(parsedFilters.AssignedUserIDs),
 		},
 		GroupBy:   req.GroupBy,
 		MaxGroups: req.MaxGroups,
@@ -486,13 +492,27 @@ func (s *snChangeRequestService) AggregateChangeRequests(ctx context.Context, re
 	if err := json.Unmarshal(raw, &resp); err != nil {
 		return domain.AggregateResponse{}, fmt.Errorf("sn change requests: parse aggregate response: %w", err)
 	}
-	// "assignmentGroup" is the only ID-valued field in
+	// "assignmentGroup" is an ID-valued field in
 	// validChangeRequestAggregateField; SN returns its bucket keys as raw
 	// sys_ids, so convert them to this platform's UUIDs before returning.
-	// "state" is a plain enum and is left as-is.
 	if req.GroupBy == "assignmentGroup" {
 		for i := range resp.Groups {
 			resp.Groups[i].Key = sysidToUUID(resp.Groups[i].Key)
+		}
+	}
+	// "state" is a plain enum, but SN's own groupBy implementation returns
+	// its raw internal state value as the bucket key (e.g. "-5"), not this
+	// platform's domain enum string. SN's response already carries the
+	// correct human-readable label for each bucket (e.g. "New"), so remap
+	// the key through the same label lookup snCRStateLabelToString uses
+	// elsewhere in this file, rather than trying to parse the raw value.
+	if req.GroupBy == "state" {
+		for i := range resp.Groups {
+			if v, ok := snCRStateLabelMap[strings.ToLower(resp.Groups[i].Label)]; ok {
+				resp.Groups[i].Key = string(v)
+			}
+			// else: leave the key as-is, mirroring snCRStateLabelToString's
+			// own defensive fallback for an unrecognized label.
 		}
 	}
 	return resp, nil
@@ -524,13 +544,14 @@ type snCreateChangeRequestPayload struct {
 	Comment             *string `json:"comment,omitempty"`
 	WorkNote            *string `json:"workNote,omitempty"`
 	// Field-parity additions -- see domain.CreateChangeRequestRequest.
-	AffectedServicesText   *string  `json:"affectedServicesText,omitempty"`
-	AffectedComponentsText *string  `json:"affectedComponentsText,omitempty"`
-	RollbackDurationText   *string  `json:"rollbackDurationText,omitempty"`
-	CustomerGroupID        *string  `json:"customerGroupId,omitempty"`
-	EnvironmentIDs         []string `json:"environmentIds,omitempty"`
-	DeploymentProductIDs   []string `json:"deploymentProductIds,omitempty"`
-	DurationInput          *int     `json:"durationInput,omitempty"`
+	AffectedServicesText         *string  `json:"affectedServicesText,omitempty"`
+	AffectedComponentsText       *string  `json:"affectedComponentsText,omitempty"`
+	RollbackDurationText         *string  `json:"rollbackDurationText,omitempty"`
+	CustomerGroupID              *string  `json:"customerGroupId,omitempty"`
+	EnvironmentIDs               []string `json:"environmentIds,omitempty"`
+	DeploymentProductIDs         []string `json:"deploymentProductIds,omitempty"`
+	DurationInput                *int     `json:"durationInput,omitempty"`
+	IsPlanningVisibleToCustomers *bool    `json:"isPlanningVisibleToCustomers,omitempty"`
 }
 
 // snCreateChangeRequestResponse mirrors the Choreo POST /change-requests response.
@@ -785,21 +806,22 @@ func (s *snChangeRequestService) CreateChangeRequest(ctx context.Context, req do
 	token := middleware.UserIDTokenFromContext(ctx)
 
 	payload := snCreateChangeRequestPayload{
-		Subject:                req.Subject,
-		Description:            req.Description,
-		Justification:          req.Justification,
-		ImplementationPlan:     req.ImplementationPlan,
-		RiskImpactAnalysis:     req.RiskImpactAnalysis,
-		BackoutPlan:            req.BackoutPlan,
-		TestPlan:               req.TestPlan,
-		Comment:                req.Comment,
-		WorkNote:               req.WorkNote,
-		AffectedServicesText:   req.AffectedServicesText,
-		AffectedComponentsText: req.AffectedComponentsText,
-		RollbackDurationText:   req.RollbackDurationText,
-		EnvironmentIDs:         uuidsToSysids(req.EnvironmentIDs),
-		DeploymentProductIDs:   uuidsToSysids(req.DeploymentProductIDs),
-		DurationInput:          req.DurationInput,
+		Subject:                      req.Subject,
+		Description:                  req.Description,
+		Justification:                req.Justification,
+		ImplementationPlan:           req.ImplementationPlan,
+		RiskImpactAnalysis:           req.RiskImpactAnalysis,
+		BackoutPlan:                  req.BackoutPlan,
+		TestPlan:                     req.TestPlan,
+		Comment:                      req.Comment,
+		WorkNote:                     req.WorkNote,
+		AffectedServicesText:         req.AffectedServicesText,
+		AffectedComponentsText:       req.AffectedComponentsText,
+		RollbackDurationText:         req.RollbackDurationText,
+		EnvironmentIDs:               uuidsToSysids(req.EnvironmentIDs),
+		DeploymentProductIDs:         uuidsToSysids(req.DeploymentProductIDs),
+		DurationInput:                req.DurationInput,
+		IsPlanningVisibleToCustomers: req.IsPlanningVisibleToCustomers,
 	}
 	if req.CustomerGroupID != nil {
 		payload.CustomerGroupID = strPtr(uuidToSysid(*req.CustomerGroupID))
@@ -902,28 +924,29 @@ var snCRPatchStateIDMap = map[domain.ChangeRequestState]int{
 
 // snPatchChangeRequestPayload mirrors the Choreo PATCH /change-requests/{id} request body.
 type snPatchChangeRequestPayload struct {
-	Title              *string `json:"title,omitempty"`
-	Description        *string `json:"description,omitempty"`
-	ProjectID          *string `json:"projectId,omitempty"`
-	CaseID             *string `json:"caseId,omitempty"`
-	DeploymentID       *string `json:"deploymentId,omitempty"`
-	DeployedProductID  *string `json:"deployedProductId,omitempty"`
-	AssignedEngineerID *string `json:"assignedEngineerId,omitempty"`
-	AssignedTeamID     *string `json:"assignedTeamId,omitempty"`
-	PlannedStartOn     *string `json:"plannedStartOn,omitempty"`
-	PlannedEndOn       *string `json:"plannedEndOn,omitempty"`
-	ImpactKey          *int    `json:"impactKey,omitempty"`
-	StateKey           *int    `json:"stateKey,omitempty"`
-	TypeKey            *string `json:"typeKey,omitempty"`
-	Justification      *string `json:"justification,omitempty"`
-	ImpactDescription  *string `json:"impactDescription,omitempty"`
-	ServiceOutage      *string `json:"serviceOutage,omitempty"`
-	CommunicationPlan  *string `json:"communicationPlan,omitempty"`
-	RollbackPlan       *string `json:"rollbackPlan,omitempty"`
-	TestPlan           *string `json:"testPlan,omitempty"`
-	IsCustomerApproved *bool   `json:"isCustomerApproved,omitempty"`
-	IsCustomerReviewed *bool   `json:"isCustomerReviewed,omitempty"`
-	RequestApproval    *bool   `json:"requestApproval,omitempty"`
+	Title                        *string `json:"title,omitempty"`
+	Description                  *string `json:"description,omitempty"`
+	ProjectID                    *string `json:"projectId,omitempty"`
+	CaseID                       *string `json:"caseId,omitempty"`
+	DeploymentID                 *string `json:"deploymentId,omitempty"`
+	DeployedProductID            *string `json:"deployedProductId,omitempty"`
+	AssignedEngineerID           *string `json:"assignedEngineerId,omitempty"`
+	AssignedTeamID               *string `json:"assignedTeamId,omitempty"`
+	PlannedStartOn               *string `json:"plannedStartOn,omitempty"`
+	PlannedEndOn                 *string `json:"plannedEndOn,omitempty"`
+	ImpactKey                    *int    `json:"impactKey,omitempty"`
+	StateKey                     *int    `json:"stateKey,omitempty"`
+	TypeKey                      *string `json:"typeKey,omitempty"`
+	Justification                *string `json:"justification,omitempty"`
+	ImpactDescription            *string `json:"impactDescription,omitempty"`
+	ServiceOutage                *string `json:"serviceOutage,omitempty"`
+	CommunicationPlan            *string `json:"communicationPlan,omitempty"`
+	RollbackPlan                 *string `json:"rollbackPlan,omitempty"`
+	TestPlan                     *string `json:"testPlan,omitempty"`
+	IsCustomerApproved           *bool   `json:"isCustomerApproved,omitempty"`
+	IsCustomerReviewed           *bool   `json:"isCustomerReviewed,omitempty"`
+	RequestApproval              *bool   `json:"requestApproval,omitempty"`
+	IsPlanningVisibleToCustomers *bool   `json:"isPlanningVisibleToCustomers,omitempty"`
 
 	// Field-parity additions. Except Comment/WorkNote, every one of these is
 	// json.RawMessage so an explicit null ("field": null) can be distinguished
@@ -986,7 +1009,7 @@ func (s *snChangeRequestService) PatchChangeRequest(ctx context.Context, id stri
 		req.RequestedByID == nil && req.AffectedServicesText == nil && req.AffectedComponentsText == nil &&
 		req.RollbackDurationText == nil && req.CustomerGroupID == nil && req.EnvironmentIDs == nil &&
 		req.DeploymentProductIDs == nil && req.Comment == nil && req.WorkNote == nil &&
-		req.DurationInput == nil {
+		req.DurationInput == nil && req.IsPlanningVisibleToCustomers == nil {
 		return domain.PatchChangeRequestResponse{}, &apierror.ValidationError{Msg: "at least one field must be provided"}
 	}
 
@@ -1094,21 +1117,22 @@ func (s *snChangeRequestService) PatchChangeRequest(ctx context.Context, id stri
 	}
 
 	payload := snPatchChangeRequestPayload{
-		Title:              req.Title,
-		Description:        req.Description,
-		PlannedStartOn:     req.PlannedStartOn,
-		PlannedEndOn:       req.PlannedEndOn,
-		Justification:      req.Justification,
-		ImpactDescription:  req.ImpactDescription,
-		ServiceOutage:      req.ServiceOutage,
-		CommunicationPlan:  req.CommunicationPlan,
-		RollbackPlan:       req.RollbackPlan,
-		TestPlan:           req.TestPlan,
-		IsCustomerApproved: req.IsCustomerApproved,
-		IsCustomerReviewed: req.IsCustomerReviewed,
-		RequestApproval:    req.RequestApproval,
-		Comment:            req.Comment,
-		WorkNote:           req.WorkNote,
+		Title:                        req.Title,
+		Description:                  req.Description,
+		PlannedStartOn:               req.PlannedStartOn,
+		PlannedEndOn:                 req.PlannedEndOn,
+		Justification:                req.Justification,
+		ImpactDescription:            req.ImpactDescription,
+		ServiceOutage:                req.ServiceOutage,
+		CommunicationPlan:            req.CommunicationPlan,
+		RollbackPlan:                 req.RollbackPlan,
+		TestPlan:                     req.TestPlan,
+		IsCustomerApproved:           req.IsCustomerApproved,
+		IsCustomerReviewed:           req.IsCustomerReviewed,
+		RequestApproval:              req.RequestApproval,
+		Comment:                      req.Comment,
+		WorkNote:                     req.WorkNote,
+		IsPlanningVisibleToCustomers: req.IsPlanningVisibleToCustomers,
 	}
 	if req.ImplementationPlan != nil {
 		v, err := rawJSONOrNull(*req.ImplementationPlan)

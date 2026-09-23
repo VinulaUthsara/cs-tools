@@ -50,6 +50,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type JSX } from "rea
 import { useLocation } from "react-router";
 import { useGetCsmCaseDetail } from "@features/csm-cases/api/useGetCsmCaseDetail";
 import { useCurrentUser } from "@context/current-user/CurrentUserContext";
+import { usePortalAccess } from "@context/current-user/usePortalAccess";
 import {
   usePatchCsmCase,
   usePatchCsmCaseById,
@@ -96,6 +97,7 @@ import ChangeSeverityDialog from "@features/csm-cases/components/ChangeSeverityD
 import ChangeCaseTypeDialog, {
   type CaseTypeTransferSubmission,
 } from "@features/csm-cases/components/ChangeCaseTypeDialog";
+import { hasPublicComment } from "@features/csm-cases/utils/commentContent";
 import { caseTypeTransferLabel } from "@features/csm-cases/utils/caseTypeTransfer";
 import SetAutocloseHoldDialog from "@features/csm-cases/components/SetAutocloseHoldDialog";
 import EditCaseDetailsDialog, {
@@ -123,11 +125,14 @@ import { usePostCsmCaseEscalation } from "@features/csm-cases/api/usePostCsmCase
 import {
   canDeescalate,
   canEscalateFurther,
+  isEscalationLevelUnset,
 } from "@features/csm-cases/utils/escalationLevel";
 import { ChildCasesWidget } from "@features/csm-cases/components/ChildCasesWidget";
 import { LinkedServiceRequestsWidget } from "@features/csm-cases/components/LinkedServiceRequestsWidget";
 import { LinkedChangeRequestsWidget } from "@features/csm-cases/components/LinkedChangeRequestsWidget";
 import { LinkedIncidentWidget } from "@features/csm-cases/components/LinkedIncidentWidget";
+import { LinkedIncidentsListWidget } from "@features/csm-cases/components/LinkedIncidentsListWidget";
+import { useSearchLinkedIncidents } from "@features/csm-cases/api/useSearchLinkedIncidents";
 import { CreateGithubIssueDialog } from "@features/csm-cases/components/CreateGithubIssueDialog";
 import { isCloudSupportSubscription } from "@features/csm-projects/utils/subscriptionType";
 import { usePostCaseGithubIssue } from "@features/csm-cases/api/useCsmCaseGithubIssue";
@@ -135,6 +140,7 @@ import CaseActivitiesFeed from "@features/csm-cases/components/CaseActivitiesFee
 import { scrollToFragmentWithRetry } from "@features/csm-cases/utils/permalinkScroll";
 import CaseMetaBand from "@features/csm-cases/components/CaseMetaBand";
 import RefreshButton from "@components/RefreshButton";
+import ExportPdfButton from "@components/ExportPdfButton";
 import {
   AttachmentsWidget,
   CustomerContextWidget,
@@ -182,6 +188,7 @@ import { useErrorBanner } from "@context/error-banner/ErrorBannerContext";
 import { useSuccessBanner } from "@context/success-banner/SuccessBannerContext";
 import QueryErrorState from "@components/QueryErrorState";
 import RelativeTime from "@components/RelativeTime";
+import EscalationLevelChip from "@components/EscalationLevelChip";
 import SeverityChip from "@components/SeverityChip";
 import StateChip from "@components/StateChip";
 import { CASE_TYPE_LABEL } from "@features/csm-cases/utils/caseType";
@@ -358,6 +365,10 @@ export default function CsmCaseDetailPage(): JSX.Element {
   // The signed-in engineer's platform UUID — the id the watch list's write
   // side is keyed by — so the Watchers tab can self-subscribe/unsubscribe.
   const { user: currentUser } = useCurrentUser();
+  // What this user's roles let them do. UX only — the backend 403s the same
+  // actions regardless, so hiding a control here is never the enforcement.
+  const { canEscalate, canDownloadAttachment, canWrite, canUseTimeCardsAndUpdates } =
+    usePortalAccess();
   const routedCaseId = useNormalizedIdParam("caseId");
   const routedNavigate = useNavTransition();
   const routedLocation = useLocation();
@@ -557,7 +568,12 @@ export default function CsmCaseDetailPage(): JSX.Element {
   const { data: caseTasks } = useSearchCaseTasks(
     isAnnouncement ? undefined : caseId,
   );
+  // The backend only serves time cards to roles that can use them, so the query
+  // is skipped (undefined id disables it) rather than left to 403.
   const { data: caseTimeCards } = useCaseTimeCards(
+    isAnnouncement || !canUseTimeCardsAndUpdates ? undefined : caseId,
+  );
+  const { data: linkedIncidents } = useSearchLinkedIncidents(
     isAnnouncement ? undefined : caseId,
   );
   // Live deployment lookup for the Details tab's "Deployment info" widget —
@@ -593,6 +609,15 @@ export default function CsmCaseDetailPage(): JSX.Element {
     isLoading: isEscalationHistoryLoading,
     isError: isEscalationHistoryError,
   } = useGetCsmCaseEscalations(caseId);
+  // The chip bar's escalation chip reads the same escalation-history query
+  // the Escalation tab already fetches (no second request) rather than the
+  // case payload's own `escalationLevel` snapshot field: `escalations` is
+  // sorted newest-first (see useGetCsmCaseEscalations/SearchCaseEscalations),
+  // so its first record's currentLevel is the case's current level. Hidden
+  // entirely at "0"/unset -- matches CasesList's own blank-unless-escalated
+  // rule -- rather than rendering an empty/"Not escalated" chip.
+  const currentEscalationLevel =
+    escalationHistory?.escalations[0]?.currentLevel ?? null;
   const postEscalation = usePostCsmCaseEscalation(caseId);
   const requestCaseUpdate = useRequestCaseUpdate();
   const findMyOngoingCases = useFindMyOngoingCases();
@@ -695,6 +720,15 @@ export default function CsmCaseDetailPage(): JSX.Element {
     kind: "close" | "propose_solution";
     targetState: BeCaseState;
   } | null>(null);
+  // Drives the "no public comment yet" confirm dialog for a WIP case moving
+  // to Awaiting info or Solution proposed — see the gate in `onAction` and
+  // `hasPublicComment`. Null hides the dialog; set to the action that was
+  // about to run so "Proceed anyway" can hand it straight to
+  // `proceedLifecycleTransition`.
+  const [noPublicCommentConfirm, setNoPublicCommentConfirm] = useState<{
+    action: "request_info" | "propose_solution";
+    targetState: BeCaseState;
+  } | null>(null);
   const [severityOpen, setSeverityOpen] = useState(false);
   const [changeCaseTypeOpen, setChangeCaseTypeOpen] = useState(false);
   const [logTimeOpen, setLogTimeOpen] = useState(false);
@@ -751,6 +785,7 @@ export default function CsmCaseDetailPage(): JSX.Element {
     clearComposerDraft();
     setAssignOpen(false);
     setResolutionDialog(null);
+    setNoPublicCommentConfirm(null);
     setSeverityOpen(false);
     setChangeCaseTypeOpen(false);
     setLogTimeOpen(false);
@@ -793,19 +828,24 @@ export default function CsmCaseDetailPage(): JSX.Element {
   // through the router (`useQueryParamTabs`), and a router write during
   // render risks updating the Router's state while this component is still
   // rendering — so it's an effect instead.
+  //
+  // The Time tracking tab gets the same treatment for a user without time-card
+  // access: its tab and panel are hidden, but a `?tab=time` deep link would
+  // otherwise leave nothing selected.
   useEffect(() => {
     if (
-      isAnnouncement &&
-      (activeTab === "related" ||
-        activeTab === "watchers" ||
-        activeTab === "sla" ||
-        activeTab === "time" ||
-        activeTab === "call-requests" ||
-        activeTab === "tasks")
+      (isAnnouncement &&
+        (activeTab === "related" ||
+          activeTab === "watchers" ||
+          activeTab === "sla" ||
+          activeTab === "time" ||
+          activeTab === "call-requests" ||
+          activeTab === "tasks")) ||
+      (activeTab === "time" && !canUseTimeCardsAndUpdates)
     ) {
       setActiveTab("activities");
     }
-  }, [isAnnouncement, activeTab, setActiveTab]);
+  }, [isAnnouncement, activeTab, setActiveTab, canUseTimeCardsAndUpdates]);
 
   // Twitter-style permalinks: when the URL has a fragment matching an entry id,
   // jump to the Activities tab and hand off to `scrollToFragmentWithRetry`,
@@ -1072,6 +1112,46 @@ export default function CsmCaseDetailPage(): JSX.Element {
     [data, findMyOngoingCases, patchCase, showError, resolveOngoingConflict],
   );
 
+  // The actual lifecycle transition, once any confirmation gate ahead of it
+  // (the no-public-comment check below, ISSU-026's own Post Resolution
+  // Activity dialog) has already been satisfied. Split out from `onAction` so
+  // the no-public-comment confirm dialog's "Proceed anyway" button can invoke
+  // exactly this — the same transition `onAction` would have run directly had
+  // there already been a public comment on the case.
+  const proceedLifecycleTransition = useCallback(
+    (action: CaseLifecycleAction, targetState: BeCaseState) => {
+      // ISSU-026: closing or proposing a solution records the Post
+      // Resolution Activity first — open that dialog instead of PATCHing
+      // immediately. Must run before the generic `targetState` PATCH below.
+      if (action === "close" || action === "propose_solution") {
+        setResolutionDialog({ kind: action, targetState });
+        return;
+      }
+
+      if (targetState === "work_in_progress" && data) {
+        void startWork(LIFECYCLE_TOAST[action], LIFECYCLE_SEVERITY[action]);
+        return;
+      }
+
+      // Real state transition via PATCH /cases/{id}; the detail + list
+      // queries refetch on success so the new state shows.
+      patchCase.mutate(
+        { state: targetState },
+        {
+          onSuccess: () =>
+            setFeedback({
+              message: LIFECYCLE_TOAST[action],
+              severity: LIFECYCLE_SEVERITY[action],
+              sticky: true,
+            }),
+          onError: (err) =>
+            showError("Could not update the case. Please try again.", err),
+        },
+      );
+    },
+    [data, startWork, patchCase, showError],
+  );
+
   const onAction = useCallback(
     (
       action: CaseLifecycleAction | { secondary: string },
@@ -1139,38 +1219,32 @@ export default function CsmCaseDetailPage(): JSX.Element {
           return;
         }
 
-        // ISSU-026: closing or proposing a solution records the Post
-        // Resolution Activity first — open that dialog instead of PATCHing
-        // immediately. Must run before the generic `targetState` PATCH below.
-        if ((action === "close" || action === "propose_solution") && targetState) {
-          setResolutionDialog({ kind: action, targetState });
-          return;
-        }
-
-        if (targetState === "work_in_progress" && data) {
-          void startWork(LIFECYCLE_TOAST[action], LIFECYCLE_SEVERITY[action]);
+        // Confirm before a WIP case moves to Awaiting info or Solution
+        // proposed with zero public comment on it yet — the customer would
+        // otherwise see the case pause on them, or a solution appear, with no
+        // explanation of why or what's proposed. Only these two transitions
+        // are gated (mirrors the defect report); every other transition
+        // (Wait on WSO2, Close, etc.) proceeds as before. Must run before
+        // `proceedLifecycleTransition`, which is exactly what "Proceed
+        // anyway" on the confirm dialog goes on to call.
+        //
+        // `CaseActionBar` already disables these two buttons while
+        // `isCommentsLoading`, so this shouldn't normally fire mid-load —
+        // but guard here too rather than trust `hasPublicComment(undefined)`
+        // (which reads as "no public comment") to answer correctly for a
+        // case whose comments just haven't arrived yet.
+        if (
+          (action === "request_info" || action === "propose_solution") &&
+          targetState &&
+          !isCommentsLoading &&
+          !hasPublicComment(comments)
+        ) {
+          setNoPublicCommentConfirm({ action, targetState });
           return;
         }
 
         if (targetState) {
-          // Real state transition via PATCH /cases/{id}; the detail + list
-          // queries refetch on success so the new state shows.
-          patchCase.mutate(
-            { state: targetState },
-            {
-              onSuccess: () =>
-                setFeedback({
-                  message: LIFECYCLE_TOAST[action],
-                  severity: LIFECYCLE_SEVERITY[action],
-                  sticky: true,
-                }),
-              onError: (err) =>
-                showError(
-                  "Could not update the case. Please try again.",
-                  err,
-                ),
-            },
-          );
+          proceedLifecycleTransition(action, targetState);
           return;
         }
         // No backend state change (e.g. assign_to_me — no assignee field yet):
@@ -1393,12 +1467,15 @@ export default function CsmCaseDetailPage(): JSX.Element {
     },
     [
       data,
+      comments,
+      isCommentsLoading,
       showError,
       showSuccess,
       patchCase,
       findMyOngoingCases,
       startWork,
       resolveOngoingConflict,
+      proceedLifecycleTransition,
       currentUserEmail,
       navigate,
     ],
@@ -1441,6 +1518,17 @@ export default function CsmCaseDetailPage(): JSX.Element {
       sticky: true,
     });
   }, []);
+
+  // "Proceed anyway" on the no-public-comment confirm dialog: run the exact
+  // transition that was held back, same as if `onAction` had found a public
+  // comment already there. "Add a comment first" just closes the dialog with
+  // no PATCH — the case stays put and the engineer can use the composer.
+  const onConfirmNoPublicComment = useCallback(() => {
+    if (!noPublicCommentConfirm) return;
+    const { action, targetState } = noPublicCommentConfirm;
+    setNoPublicCommentConfirm(null);
+    proceedLifecycleTransition(action, targetState);
+  }, [noPublicCommentConfirm, proceedLifecycleTransition]);
 
   // Assign the case to the chosen engineer via PATCH { assigneeEmail }. The
   // detail query is invalidated by the hook, so the assignee display refreshes
@@ -2093,18 +2181,60 @@ export default function CsmCaseDetailPage(): JSX.Element {
     ? "This case has an open task. Closing may be rejected until it's resolved or closed."
     : undefined;
 
+  const handleExportCasePdf = async (): Promise<void> => {
+    try {
+      const { generateCaseReportPdf } = await import(
+        "@features/csm-cases/utils/caseReportPdf"
+      );
+      generateCaseReportPdf(
+        c,
+        mergedComments,
+        activityAudit ?? [],
+        attachmentList,
+        caseFeedback ?? [],
+      );
+    } catch (err) {
+      showError("Could not export this case as a PDF. Please try again.", err);
+    }
+  };
+
   return (
     <Box sx={{ display: "flex", flexDirection: "column", gap: 2.5 }}>
-      <Button
-        variant="text"
-        size="small"
-        className="csm-print-hide"
-        startIcon={<ArrowLeft size={16} />}
-        onClick={() => navigate(resolvedBackPath)}
-        sx={{ alignSelf: "flex-start" }}
+      <Box
+        sx={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+        }}
       >
-        Back
-      </Button>
+        <Button
+          variant="text"
+          size="small"
+          className="csm-print-hide"
+          startIcon={<ArrowLeft size={16} />}
+          onClick={() => navigate(resolvedBackPath)}
+          sx={{ alignSelf: "flex-start" }}
+        >
+          Back
+        </Button>
+        {canWrite && (
+          <ExportPdfButton
+            onExport={handleExportCasePdf}
+            disabled={
+              isCommentsLoading ||
+              isActivityLoading ||
+              isAttachmentsLoading ||
+              isFeedbackLoading ||
+              isChatLoading ||
+              isCommentsError ||
+              isActivityError ||
+              isAttachmentsError ||
+              isFeedbackError ||
+              isChatError
+            }
+          />
+        )}
+      </Box>
 
       <Box
         sx={{
@@ -2176,6 +2306,9 @@ export default function CsmCaseDetailPage(): JSX.Element {
                 <SeverityChip severity={c.severity} withLabel />
               )}
             {!isAnnouncement && <StateChip state={c.state} />}
+            {!isAnnouncement && !isEscalationLevelUnset(currentEscalationLevel) && (
+              <EscalationLevelChip level={currentEscalationLevel as string} short />
+            )}
             {/* Related/Parent moved to CaseMetaBand's Overview cells — those
                 are singular facts (never more than one each), so a compact
                 "Cell" fits better than a chip crowding this row, especially
@@ -2196,6 +2329,28 @@ export default function CsmCaseDetailPage(): JSX.Element {
                   sx={{ fontWeight: 600 }}
                 />
               )}
+            {/* Quick visual flag that the case's project has an onboarding
+                engagement actively underway — requested so an engineer
+                doesn't have to open the project page to notice it. Gated on
+                `onboardingStatus === "In-Progress"` only: the chip still
+                shows with no owner assigned, the tooltip just says so. */}
+            {!isAnnouncement && caseProject?.onboardingStatus === "In-Progress" && (
+              <Tooltip
+                title={
+                  caseProject.onboardingOwner?.name
+                    ? `Onboarding owner: ${caseProject.onboardingOwner.name}`
+                    : "Onboarding owner: Unassigned"
+                }
+              >
+                <Chip
+                  size="small"
+                  variant="outlined"
+                  color="info"
+                  label="Onboarding"
+                  sx={{ fontWeight: 600 }}
+                />
+              </Tooltip>
+            )}
             {!isAnnouncement && c.state === "work_in_progress" && (
               <Chip
                 size="small"
@@ -2221,7 +2376,7 @@ export default function CsmCaseDetailPage(): JSX.Element {
           </Box>
           <Typography variant="h5">{c.subject}</Typography>
         </Box>
-        {!isAnnouncement && (
+        {!isAnnouncement && canWrite && (
           <Box
             className="csm-print-hide"
             sx={{ flexShrink: 0, alignSelf: { xs: "stretch", md: "flex-start" } }}
@@ -2233,6 +2388,7 @@ export default function CsmCaseDetailPage(): JSX.Element {
               isPending={patchCase.isPending && !isAcknowledging}
               onAcknowledge={onAcknowledge}
               isAcknowledging={isAcknowledging}
+              commentsLoading={isCommentsLoading}
             />
           </Box>
         )}
@@ -2283,6 +2439,7 @@ export default function CsmCaseDetailPage(): JSX.Element {
           {TAB_DEFS.filter(
             (t) =>
               !t.hidden &&
+              (t.id !== "time" || canUseTimeCardsAndUpdates) &&
               (!isAnnouncement ||
                 (t.id !== "related" &&
                   t.id !== "watchers" &&
@@ -2293,9 +2450,10 @@ export default function CsmCaseDetailPage(): JSX.Element {
             // Counts shown only where the tab IS the list (unambiguous), or
             // where the parent case-detail object already has the list in
             // hand. "related" sums linkedChangeRequests + linkedServiceRequests
-            // (both already present on `c`); ChildCasesWidget is still
-            // excluded since it runs its own scoped query and would need an
-            // extra fetch to get a count.
+            // (both already present on `c`) plus linkedIncidents' own total,
+            // fetched unconditionally above (see that hook call's comment) so
+            // its widget's tab mount doesn't refetch. ChildCasesWidget is
+            // still excluded since nothing above already fetches it.
             const count =
               t.id === "watchers"
                 ? c.watchers.length
@@ -2312,7 +2470,8 @@ export default function CsmCaseDetailPage(): JSX.Element {
                           : t.id === "related"
                             ? (c.parentCase?.type === "incident" ? 1 : 0) +
                               (c.linkedChangeRequests?.length ?? 0) +
-                              (c.linkedServiceRequests?.length ?? 0)
+                              (c.linkedServiceRequests?.length ?? 0) +
+                              (linkedIncidents?.total ?? 0)
                             : undefined;
             return (
               <Tab
@@ -2342,7 +2501,7 @@ export default function CsmCaseDetailPage(): JSX.Element {
               comment types there), despite the hidden CaseActionBar above —
               that hides case-lifecycle patch actions, which don't apply to an
               announcement, not the ability to reply to one. */}
-          {composerOpen ? (
+          {!canWrite ? null : composerOpen ? (
             <Card
               className="csm-print-hide"
               sx={{ p: 2.5, display: "flex", flexDirection: "column", gap: 1.5 }}
@@ -2370,7 +2529,8 @@ export default function CsmCaseDetailPage(): JSX.Element {
               <CsmCaseCommentInput
                 disabled={!caseId || isClosed}
                 publicCommentDisabledReason={publicReplyGateReason}
-                canResumeToUnlockPublicReply={canResumeToUnlockPublicReply}
+                canResumeToUnlockPublicReply={canWrite && canResumeToUnlockPublicReply}
+                attachmentsDisabled={!canWrite}
                 onResumeWork={() => onAction({ secondary: "toggle_work_state" })}
                 isResumingWork={patchCase.isPending}
                 autoFocus
@@ -2382,7 +2542,7 @@ export default function CsmCaseDetailPage(): JSX.Element {
                 onDraftInternalChange={setDraftInternal}
                 draftSourceMode={draftSourceMode}
                 onDraftSourceModeChange={setDraftSourceMode}
-                onSubmit={async (bodyHtml, internal, commentAttachments, mentionedUserIds) => {
+                onSubmit={async (bodyHtml, internal, commentAttachments) => {
                   if (!caseId) return;
                   // Post the comment only when there's text; an attachment-only
                   // send skips the comment endpoint and just uploads the files.
@@ -2397,7 +2557,6 @@ export default function CsmCaseDetailPage(): JSX.Element {
                       bodyHtml,
                       authorName: engineerName,
                       internal,
-                      mentionedUserIds,
                     });
                   }
                   // Attachments are case-level (no comment linkage on the BE);
@@ -2524,7 +2683,7 @@ export default function CsmCaseDetailPage(): JSX.Element {
                   attachments={attachmentList}
                   feedback={caseFeedback ?? []}
                   callRequests={callRequests ?? []}
-                  onDownloadAttachment={onDownloadAttachment}
+                  onDownloadAttachment={canDownloadAttachment ? onDownloadAttachment : undefined}
                   preview={{
                     onGetPreviewContent: getAttachmentPreviewContent,
                     previewTarget,
@@ -2616,8 +2775,8 @@ export default function CsmCaseDetailPage(): JSX.Element {
           />
           <TagsWidget
             tags={c.tags}
-            onAdd={isClosed ? undefined : () => setAddTagOpen(true)}
-            onRemove={isClosed ? undefined : (t) => onRemoveTag(t.id)}
+            onAdd={isClosed || !canWrite ? undefined : () => setAddTagOpen(true)}
+            onRemove={isClosed || !canWrite ? undefined : (t) => onRemoveTag(t.id)}
             removingId={removeTag.isPending ? removeTag.variables : null}
           />
           <EscalationWidget
@@ -2629,11 +2788,12 @@ export default function CsmCaseDetailPage(): JSX.Element {
               // Visibility is level-eligibility only -- isClosed disables
               // via actionDisabledReason below instead of hiding the button,
               // so its tooltip still has something to anchor to.
-              canEscalateFurther(c.escalationLevel)
+              canEscalate && canEscalateFurther(c.escalationLevel)
                 ? () => setEscalationDialogAction("ESCALATE")
                 : undefined
             }
             onDeescalate={
+              canEscalate &&
               canDeescalate(c.escalationLevel) &&
               callerIsNotifiedOnCurrentEscalation
                 ? () => setEscalationDialogAction("DEESCALATE")
@@ -2668,7 +2828,7 @@ export default function CsmCaseDetailPage(): JSX.Element {
                   variant="outlined"
                   startIcon={<LinkIcon size={14} />}
                   onClick={() => setLinkCaseOpen(true)}
-                  disabled={isClosed}
+                  disabled={isClosed || !canWrite}
                 >
                   Link to another case
                 </Button>
@@ -2697,8 +2857,9 @@ export default function CsmCaseDetailPage(): JSX.Element {
               caseId={c.id}
               parentCase={c.parentCase}
               onLinkIncident={() => setLinkIncidentOpen(true)}
-              linkDisabled={isClosed}
+              linkDisabled={isClosed || !canWrite}
             />
+            <LinkedIncidentsListWidget caseId={c.id} />
             {/* Change requests are only ever raised from a service request,
                 never directly from a plain case — gate solely on
                 `isServiceRequest` rather than falling back to
@@ -2711,7 +2872,7 @@ export default function CsmCaseDetailPage(): JSX.Element {
             <LinkedServiceRequestsWidget
               caseId={c.id}
               linkedServiceRequests={c.linkedServiceRequests}
-              createDisabled={isClosed}
+              createDisabled={isClosed || !canWrite}
               onCreateServiceRequest={() => {
                 const navState: CreateServiceRequestFromCaseNavState = {
                   projectId: c.projectId,
@@ -2737,7 +2898,7 @@ export default function CsmCaseDetailPage(): JSX.Element {
           <WatchersWidget
             entityKind="case"
             watchers={c.watchers}
-            onReplace={onReplaceWatchers}
+            onReplace={canWrite ? onReplaceWatchers : undefined}
             isSaving={patchCase.isPending}
             onRefresh={() => void refetchCaseDetail()}
             isRefreshing={isFetchingCaseDetail}
@@ -2779,10 +2940,10 @@ export default function CsmCaseDetailPage(): JSX.Element {
                   "Could not upload the attachment.")
                 : null
             }
-            onUpload={isClosed ? undefined : onUploadAttachment}
-            onDownloadAll={onDownloadAllAttachments}
-            onDownload={onDownloadAttachment}
-            onDelete={setPendingDelete}
+            onUpload={isClosed || !canWrite ? undefined : onUploadAttachment}
+            onDownloadAll={canDownloadAttachment ? onDownloadAllAttachments : undefined}
+            onDownload={canDownloadAttachment ? onDownloadAttachment : undefined}
+            onDelete={canWrite ? setPendingDelete : undefined}
             deletingId={deleteAttachment.isPending ? pendingDelete?.id : null}
             preview={{
               onGetPreviewContent: getAttachmentPreviewContent,
@@ -2793,7 +2954,7 @@ export default function CsmCaseDetailPage(): JSX.Element {
         </Box>
       )}
 
-      {activeTab === "time" && (
+      {activeTab === "time" && canUseTimeCardsAndUpdates && (
         <Box sx={{ display: "grid", gap: 2, gridTemplateColumns: "1fr" }}>
           <CaseTimeCardsPanel
             caseId={c.id}
@@ -2847,6 +3008,37 @@ export default function CsmCaseDetailPage(): JSX.Element {
           onSubmit={onResolutionSubmit}
         />
       )}
+
+      <Dialog
+        open={!!noPublicCommentConfirm}
+        onClose={() => setNoPublicCommentConfirm(null)}
+        maxWidth="xs"
+        fullWidth
+      >
+        <DialogTitle>No public comment on this case yet</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2">
+            {noPublicCommentConfirm?.action === "propose_solution"
+              ? "This case has no public comment yet, and the customer won't be told what the proposed solution is unless one is added. Add a public comment first, or proceed and record the Post Resolution Activity anyway."
+              : "This case has no public comment yet, so the customer won't see why it's now waiting on them. Add a public comment first, or proceed anyway."}
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button
+            color="inherit"
+            onClick={() => setNoPublicCommentConfirm(null)}
+          >
+            Add a comment first
+          </Button>
+          <Button
+            variant="contained"
+            color="warning"
+            onClick={onConfirmNoPublicComment}
+          >
+            Proceed anyway
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       {severityOpen && (
         <ChangeSeverityDialog

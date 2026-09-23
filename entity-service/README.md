@@ -29,7 +29,7 @@ entity-service/
 │   │   ├── interfaces.go        # CaseRepository and CaseService interfaces
 │   │   ├── entity_service.go    # Business logic — pagination, validation
 │   │   ├── event_publisher_service.go # EventPublisherService.Publish — builds the envelope, publishes it, records a failure if Event Hub doesn't ack (wired in via routes.go; called from snCaseService.CreateCase and snIncidentService.CreateIncident)
-│   │   └── sla_clock_service.go # SLAClockService — register/get/mark-tier-reached for a case's SLA clocks
+│   │   └── sla_status_service.go # SLAStatusService — lists currently-active SLA clocks, read live from the "sla" table
 │   ├── repository/
 │   │   ├── entity_repo.go       # SQL queries against the "case" table
 │   │   └── tx.go                # Transaction helper
@@ -115,8 +115,47 @@ HTTP Request
 | DB_PASSWORD | Yes      | —         | Database password |
 | DB_NAME     | Yes      | postgres  | Database name     |
 | DB_SSLMODE  | No       | require   | SSL mode          |
+| SERVER_PORT | No       | 8080      | Main API listener port |
+| HEALTH_PORT | No       | 8081      | Health probe listener port; must differ from `SERVER_PORT`, and must be left at its default in Choreo deployments (see below) |
 
 > `.env` file is loaded automatically if present. Absent `.env` is silently ignored; a malformed one causes a fatal startup error.
+
+## Health probes
+
+The service listens on **two** ports. `SERVER_PORT` (8080) carries the API and is published at
+**Organization** visibility. `HEALTH_PORT` (8081) carries nothing but the health probes and is
+published at **Public** visibility, so external alerting can poll it without credentials — see
+`.choreo/component.yaml`, which declares one Choreo endpoint per port.
+
+`.choreo/component.yaml` declares both ports statically and nothing reconciles them with the
+environment at deploy time, so **overriding `SERVER_PORT` or `HEALTH_PORT` in a Choreo deployment
+routes traffic to a port with no listener.** For the health endpoint that is particularly
+unhelpful: a probe that never answers looks exactly like the outage it exists to report. Override
+these locally only.
+
+The split is deliberate and is the security boundary itself: what is publicly reachable is decided
+by which mux a handler is registered on (`internal/server/health.go`), not by a gateway path rule
+in another system that fails open if it is ever wrong. Nothing but the two probes below is
+reachable on the public port, whatever happens to that config. **Do not point the public Choreo
+endpoint at port 8080, and do not register business routes on the health mux.**
+
+| Probe | Port | Answers |
+| ----- | ---- | ------- |
+| `GET /health` | 8080 and 8081 | Always `200 {"status":"ok"}`. Pure liveness — makes no dependency calls, so a database outage never gets the instance restarted or pulled from rotation. |
+| `GET /health/database` | 8081 only | `200 {"status":"ok","database":"up"}` when a round trip to PostgreSQL succeeds, `503 {"status":"unavailable","database":"down"}` when it fails. |
+
+Two probes rather than one combined check, so alerting can tell "the component is down" apart from
+"the component is up but its database is not".
+
+The database probe alerts on a **PostgreSQL** outage specifically. A deployment running without a
+connection pool (`DATA_SOURCE=servicenow`, where reads go through the ServiceNow integration
+service) has no PostgreSQL to be out, so it answers `200` with `database: "not_configured"` rather
+than a 503 that would fire continuously against a database that is not supposed to exist.
+
+Failure bodies deliberately carry no error detail — no driver message, host, or port. The
+endpoint is public, so it reports only whether the dependency is up, never anything about the
+infrastructure behind it. Both probes send `Cache-Control: no-store`, since a cached 200 would
+keep reporting healthy straight through an outage.
 
 ### Directory vocabularies — moved
 
@@ -150,26 +189,48 @@ rather than async.
 | `EVENT_HUB_CONNECTION_STRING` | The namespace's Shared Access Policy connection string — must be namespace-scoped (no `EntityPath`), not scoped to a single Event Hub (required once `EVENT_HUB_BROKER` is set) |
 | `EVENT_HUB_TOPIC` | Event Hub (Kafka topic) name, e.g. `case-events` — must match `csm-notification-service`'s own `EVENT_HUB_TOPIC` (required once `EVENT_HUB_BROKER` is set) |
 | `EVENT_PUBLISHING_ENABLED` | Set to `true` to actually publish. Defaults to `false` — safe by default even with Event Hub fully configured (optional) |
+| `AUTH_ISSUER` / `AUTH_JWKS_URL` | Asgardeo issuer and JWKS URL for validating the Asgardeo tokens (`x-user-id-token` user ID token, `Authorization: Bearer` client-credentials token) -- always on, there is no flag to disable it. Required; the JWKS must load at startup or the process exits. A present-but-invalid token is a 401 on every route |
+| `AUTH_USER_TOKEN_AUDIENCES` | Comma-separated client ids an ID token's `aud` must contain to count as a user token; required |
+| `AUTH_CLOCK_SKEW` | Leeway for `exp` (default `30s`) |
+| `AUTH_INTERNAL_CLIENT_IDS` | Comma-separated Asgardeo application client ids trusted with unconditional full access to every project and case (checked against a client-credentials `Authorization: Bearer` token), regardless of any `x-user-id-token` the same request also carries. A caller not in this list is resolved purely from its `x-user-id-token` instead. Which real client ids go here is a deployment decision, but a service that calls the scoped endpoints directly with only a client-credentials token gets a 401 unless it is listed (optional) |
+| `CUSTOMER_ROLES` | Comma-separated ServiceNow role names whose presence on a case comment's author marks it a customer reply — see "Customer reply state transition" below. No default; unset means that path never fires (optional) |
 
-### SLA clocks
+### SLA status
 
-`sla_clocks` (migration `000011`) durably tracks per-case SLA timers — `caseId`/`clockType`,
-`startedAt`/`dueAt`, and up to three tier-crossing timestamps (`reached50At`/`reached75At`/`reached100At`).
-Has no ServiceNow equivalent — always backed by Postgres regardless of `DATA_SOURCE`, same as
-`event_publish_failures`. `clockType` is a caller-defined string, not a fixed enum: which clock types
-exist and what duration each gets is a policy decision made entirely by whatever publishes the
-triggering event — this service only stores the result, it does not compute durations from case
-severity or anything else.
+`GET /sla-status` reads SLA state live from the `sla` table (migration `000052`), which
+ServiceNow's own SLA engine populates via sync — real `businessElapsedPercent`/`hasBreached`/
+`stage` per `(work_item, sla_policy)`. Has no ServiceNow equivalent of its own — always backed
+by Postgres regardless of `DATA_SOURCE`, same as `event_publish_failures`. `clockType` is
+`response`/`workaround`/`resolution`, lower-cased from `sla_policy.target`.
 
-Consumed by `csm-notification-service`'s SLA timer engine (`internal/slaengine`), which registers a
-clock on `POST /cases/{caseId}/sla-clocks`, reads it back via `GET /cases/{caseId}/sla-clocks/{clockType}`
-to check `pausedOn` before firing a tier, and records a crossed tier idempotently via
-`PATCH /cases/{caseId}/sla-clocks/{clockType}/tiers/{tier}` with `{"status": "reached"}`.
+Returns every currently-active clock across every case-like work item in one paginated list
+(default limit `500`, max `2000` — much higher than this service's other paginated endpoints,
+since the one real caller is `csm-notification-service` polling periodically, not a UI list).
+There is no registration step and nothing for this service to schedule or track in-process any
+more: the synced `sla` row already reflects pauses, completions, and breaches, because
+ServiceNow's own SLA engine reacted to those events on its own side. This replaces an earlier
+`sla_clocks` design (a hand-registered clock per case, using a hardcoded severity->duration
+guess) that existed before the `sla` table did — see `CLAUDE.md`'s "SLA status" section for
+the full history.
+
+`csm-notification-service`'s SLA engine polls `GET /sla-status` periodically and diffs
+`businessElapsedPercent` against what it already alerted on itself (its own Redis state, not
+anything this service tracks), sending a Google Chat card directly on a newly-crossed tier —
+not routed through this service.
+
+### Customer reply state transition
+
+When a customer-visible comment (not a work note) from a user holding one of the `CUSTOMER_ROLES`
+roles (looked up via `SNUserService.SearchUsers`, filtered by the comment author's email) arrives
+while the case is `Awaiting Info`/`Solution Proposed`, `sn_case_service.go`'s
+`applyCustomerReplyStateTransition` moves it back to `Waiting on WSO2` — a customer reply means
+it's WSO2's turn to act again. Implemented as a plain in-process call to this service's own
+`UpdateCase`, not a separate ServiceNow PATCH — so it gets `case.status_changed` publishing for
+free, with no duplicated logic.
 
 ### Scheduled task runs
 
-`scheduled_task_run` (migration `000013` — the one intentionally singular table name in this
-schema) is durable claim/retry state for `operations/csm-scheduled-tasks`, a single Choreo
+`scheduled_task_run` (migration `000045`) is durable claim/retry state for `operations/csm-scheduled-tasks`, a single Choreo
 Scheduled Task that fans out to many independently-scheduled sub-crons on one shared driver
 cadence. Has no ServiceNow equivalent — always backed by Postgres. No stored status column: a row's
 state is always derivable from which timestamp is set (`succeededOn`, `supersededOn`,

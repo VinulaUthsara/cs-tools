@@ -62,9 +62,15 @@ interface CsmCaseCommentInputProps {
     html: string,
     internal: boolean,
     attachments: CommentAttachmentDraft[],
-    mentionedUserIds: string[],
   ) => Promise<unknown> | void;
   disabled?: boolean;
+  /**
+   * Hides the attach button and ignores dropped files. Attachments are uploaded
+   * by a separate request the backend only allows with write access, after the
+   * comment itself has been posted, so a caller without it would otherwise end
+   * up with a comment and a rejected upload.
+   */
+  attachmentsDisabled?: boolean;
   /**
    * When set, a **customer-visible** reply cannot be sent right now (e.g. the
    * case isn't in-progress/ongoing) and this string explains why. Only the
@@ -132,26 +138,6 @@ function isEmpty(html: string): boolean {
 }
 
 /**
- * Collects every mentioned user id out of the composer's HTML output.
- * `MentionNode.exportDOM` (see rich-text-editor/MentionNode.tsx) round-trips
- * each `@mention` through this editor's HTML pipeline as
- * `<span data-mention-user-id="...">@Name</span>` — parsing that markup here
- * (rather than walking the live Lexical editor state) works whether the
- * comment came from the rich editor or was hand-edited in HTML-source mode,
- * and reuses the same HTML string already being sent as `content`. Dedupes
- * so mentioning the same person twice only sends their id once.
- */
-function extractMentionedUserIds(html: string): string[] {
-  const ids = new Set<string>();
-  const pattern = /data-mention-user-id="([^"]+)"/g;
-  let match: RegExpExecArray | null;
-  while ((match = pattern.exec(html)) !== null) {
-    ids.add(match[1]);
-  }
-  return Array.from(ids);
-}
-
-/**
  * A single piece of state that's either controlled by the parent (value +
  * onChange both supplied) or managed locally (either omitted) — same
  * "value"/"onChange" convention as a controlled `<input>`, but supporting a
@@ -205,6 +191,7 @@ function useDraftState<T>(
 export default function CsmCaseCommentInput({
   onSubmit,
   disabled = false,
+  attachmentsDisabled = false,
   publicCommentDisabledReason = null,
   canResumeToUnlockPublicReply = false,
   onResumeWork,
@@ -288,11 +275,11 @@ export default function CsmCaseCommentInput({
       // whatever was on the page.
       if (!isFileDrag(e)) return;
       e.preventDefault();
-      if (disabled || submitting) return;
+      if (disabled || submitting || attachmentsDisabled) return;
       dragCounter.current += 1;
       setDragOver(true);
     },
-    [disabled, submitting, isFileDrag],
+    [disabled, submitting, attachmentsDisabled, isFileDrag],
   );
   const onDragOver = useCallback(
     (e: DragEvent) => {
@@ -349,10 +336,10 @@ export default function CsmCaseCommentInput({
       e.preventDefault();
       dragCounter.current = 0;
       setDragOver(false);
-      if (disabled || submitting) return;
+      if (disabled || submitting || attachmentsDisabled) return;
       addDroppedFiles(e.dataTransfer.files);
     },
-    [disabled, submitting, isFileDrag, addDroppedFiles],
+    [disabled, submitting, attachmentsDisabled, isFileDrag, addDroppedFiles],
   );
 
   // Incrementing this trigger clears the editor (see Editor's ResetPlugin).
@@ -412,7 +399,7 @@ export default function CsmCaseCommentInput({
     setError(null);
     setSubmitting(true);
     try {
-      await onSubmit(html, internal, attachments, extractMentionedUserIds(html));
+      await onSubmit(html, internal, attachments);
       setHtml("");
       setAttachments([]);
       resetTriggerRef.current += 1;
@@ -646,7 +633,7 @@ export default function CsmCaseCommentInput({
           showKeyboardHint
           autoFocus={autoFocus}
           enterToSubmit={false}
-          onAttachmentClick={onAttachmentClick}
+          onAttachmentClick={attachmentsDisabled ? undefined : onAttachmentClick}
           attachments={attachments.map((a) => a.file)}
           onAttachmentRemove={onAttachmentRemove}
           onSubmitKeyDown={() => {

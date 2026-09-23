@@ -46,6 +46,26 @@ func validateUUIDs(field string, ids []string) error {
 	return nil
 }
 
+// derefSeverity/derefState dereference domain.CaseView/Case's now-optional
+// Severity/State (nil in practice for most real Postgres cases, but always
+// set on the ServiceNow data source) to their plain zero-valued type, for a
+// caller (map lookup, string conversion, equality check) that predates
+// those fields becoming optional and only ever runs against the
+// ServiceNow-backed path where a nil is not actually expected.
+func derefSeverity(s *domain.CaseSeverity) domain.CaseSeverity {
+	if s == nil {
+		return ""
+	}
+	return *s
+}
+
+func derefState(s *domain.CaseState) domain.CaseState {
+	if s == nil {
+		return ""
+	}
+	return *s
+}
+
 // validateDateRange enforces the same rules as the Ballerina reference's
 // shared validateDateRange helper: both dates must be exactly 10 characters
 // in YYYY-MM-DD format, startDate must be strictly before endDate, and the
@@ -138,6 +158,30 @@ func NewUserService(repo repository.UserRepository) UserService {
 	return &userService{repo: repo}
 }
 
+// GetUser implements UserService.
+func (s *userService) GetUser(ctx context.Context, id string) (domain.UserDetail, error) {
+	if err := validateUUIDs("id", []string{id}); err != nil {
+		return domain.UserDetail{}, err
+	}
+	u, err := s.repo.GetUserDetail(ctx, id)
+	if err != nil {
+		return domain.UserDetail{}, err
+	}
+	if u.Roles, err = s.repo.GetUserRoles(ctx, id); err != nil {
+		return domain.UserDetail{}, err
+	}
+	if u.Groups, err = s.repo.GetUserGroups(ctx, id); err != nil {
+		return domain.UserDetail{}, err
+	}
+	// Project access is a customer concept: staff have no project-contact rows.
+	if u.UserType == domain.UserTypeCustomer && u.Email != "" {
+		if u.ProjectAccess, err = s.repo.GetUserProjectAccess(ctx, u.Email); err != nil {
+			return domain.UserDetail{}, err
+		}
+	}
+	return u, nil
+}
+
 // SearchUsers implements UserService.
 func (s *userService) SearchUsers(ctx context.Context, req domain.SearchUsersRequest) (domain.SearchUsersResponse, error) {
 	if err := normalizeUserPagination(&req.Pagination); err != nil {
@@ -146,9 +190,6 @@ func (s *userService) SearchUsers(ctx context.Context, req domain.SearchUsersReq
 	if err := validateSearchQuery(req.Filters.SearchQuery); err != nil {
 		return domain.SearchUsersResponse{}, err
 	}
-	if len(req.Filters.RoleIDs) > 0 {
-		return domain.SearchUsersResponse{}, &apierror.ValidationError{Msg: "roleIds filter is only supported for the ServiceNow data source"}
-	}
 	if len(req.Filters.UserIDs) > 0 || len(req.Filters.GroupIDs) > 0 || len(req.Filters.GroupNames) > 0 {
 		return domain.SearchUsersResponse{}, &apierror.ValidationError{
 			Msg: "userIds, groupIds and groupNames filters are only supported for the ServiceNow data source"}
@@ -156,14 +197,23 @@ func (s *userService) SearchUsers(ctx context.Context, req domain.SearchUsersReq
 	if req.Filters.Active != nil {
 		return domain.SearchUsersResponse{}, &apierror.ValidationError{Msg: "active filter is only supported for the ServiceNow data source"}
 	}
-	if req.SortBy.Field != "" {
-		return domain.SearchUsersResponse{}, &apierror.ValidationError{Msg: "sortBy is only supported for the ServiceNow data source"}
+	if req.SortBy.Field != "" && !validUserSortField[req.SortBy.Field] {
+		return domain.SearchUsersResponse{}, &apierror.ValidationError{Msg: "sortBy.field contains invalid value: " + string(req.SortBy.Field)}
+	}
+	if req.SortBy.Order != "" && req.SortBy.Field == "" {
+		return domain.SearchUsersResponse{}, &apierror.ValidationError{Msg: "sortBy.order requires sortBy.field to be set"}
+	}
+	if req.SortBy.Order != "" && !validUserSortOrder[req.SortBy.Order] {
+		return domain.SearchUsersResponse{}, &apierror.ValidationError{Msg: "sortBy.order contains invalid value: " + string(req.SortBy.Order)}
 	}
 	if len(req.Filters.UserNames) > 50 {
 		return domain.SearchUsersResponse{}, &apierror.ValidationError{Msg: "userNames cannot contain more than 50 values"}
 	}
 	if len(req.Filters.Emails) > 50 {
 		return domain.SearchUsersResponse{}, &apierror.ValidationError{Msg: "emails cannot contain more than 50 values"}
+	}
+	if len(req.Filters.RoleIDs) > 50 {
+		return domain.SearchUsersResponse{}, &apierror.ValidationError{Msg: "roleIds cannot contain more than 50 values"}
 	}
 
 	users, total, err := s.repo.SearchUsers(ctx, req)
@@ -189,10 +239,13 @@ func (s *userService) SearchUsers(ctx context.Context, req domain.SearchUsersReq
 // matching row. See case_service.go's identical pattern for CreateCase /
 // CreateCaseComment.
 //
-// Postgres users have no roles or group-membership tables (unlike the
-// ServiceNow data source), so Roles and Groups are always empty rather than
-// fabricated — the frontend's team/role resolution is simply a no-op for
-// this data source today.
+// Postgres has role/user_role tables (migrations 000004/000006 -- see
+// SearchUsers' roleIds filter, which does query them) and no group-membership
+// table at all. GetMe doesn't resolve either here: Roles is left empty rather
+// than queried, since no caller has asked for it on this path yet, and Groups
+// is always empty because there is genuinely nothing to resolve it from —
+// the frontend's team/role resolution is simply a no-op for this data source
+// today.
 func (s *userService) GetMe(ctx context.Context) (domain.GetUserMeResponse, error) {
 	token := middleware.UserIDTokenFromContext(ctx)
 	if token == "" {
@@ -206,6 +259,16 @@ func (s *userService) GetMe(ctx context.Context) (domain.GetUserMeResponse, erro
 	if err != nil {
 		return domain.GetUserMeResponse{}, err
 	}
+	roles, err := s.repo.GetUserRoles(ctx, user.ID)
+	if err != nil {
+		return domain.GetUserMeResponse{}, err
+	}
+	// GetUserMeResponse.Groups's own doc comment: best-effort, empty rather
+	// than a failed request when the lookup errors.
+	groups, err := s.repo.GetUserGroups(ctx, user.ID)
+	if err != nil {
+		groups = []domain.UserGroupRef{}
+	}
 
 	firstName := user.FirstName
 	return domain.GetUserMeResponse{
@@ -214,7 +277,7 @@ func (s *userService) GetMe(ctx context.Context) (domain.GetUserMeResponse, erro
 		FirstName: &firstName,
 		LastName:  user.LastName,
 		TimeZone:  user.Timezone,
-		Roles:     []string{},
-		Groups:    []domain.UserGroupRef{},
+		Roles:     roles,
+		Groups:    groups,
 	}, nil
 }

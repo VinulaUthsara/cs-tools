@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"time"
 
 	"github.com/wso2-open-operations/cs-tools/entity-service/internal/apierror"
@@ -122,6 +123,10 @@ type snIncidentFilters struct {
 	// doc comment. Matched as a union against the incident's backing
 	// business_service name.
 	ProductNames []string `json:"productNames,omitempty"`
+	// AssignedUserIDs: sys_user sys_ids (converted from UUIDs). Wire key is
+	// plural "assignedUserIds" to match Ballerina/SN's contract, even though
+	// the domain-facing filter field is singular "assignedUserId".
+	AssignedUserIDs []string `json:"assignedUserIds,omitempty"`
 }
 
 // snIncidentPriorityKeyMap maps domain IncidentPriority enums to SN numeric priority keys.
@@ -282,6 +287,7 @@ func (s *snIncidentService) SearchIncidents(ctx context.Context, req domain.Sear
 			SlaViolated:        parsedFilters.SlaViolated,
 			MadeSla:            parsedFilters.MadeSla,
 			ProductNames:       parsedFilters.ProductNames,
+			AssignedUserIDs:    uuidsToSysids(parsedFilters.AssignedUserIDs),
 		},
 		SortBy:     snSortBy,
 		Pagination: snProjectPagination{Limit: req.Pagination.Limit, Offset: req.Pagination.Offset},
@@ -427,6 +433,7 @@ func (s *snIncidentService) AggregateIncidents(ctx context.Context, req domain.A
 			SlaViolated:        parsedFilters.SlaViolated,
 			MadeSla:            parsedFilters.MadeSla,
 			ProductNames:       parsedFilters.ProductNames,
+			AssignedUserIDs:    uuidsToSysids(parsedFilters.AssignedUserIDs),
 		},
 		GroupBy:   req.GroupBy,
 		MaxGroups: req.MaxGroups,
@@ -441,13 +448,32 @@ func (s *snIncidentService) AggregateIncidents(ctx context.Context, req domain.A
 	if err := json.Unmarshal(raw, &resp); err != nil {
 		return domain.AggregateResponse{}, fmt.Errorf("sn incidents: parse aggregate response: %w", err)
 	}
-	// "assignmentGroup" and "businessService" are the only ID-valued fields
-	// in validIncidentAggregateField; SN returns their bucket keys as raw
+	// "assignmentGroup" and "businessService" are ID-valued fields in
+	// validIncidentAggregateField; SN returns their bucket keys as raw
 	// sys_ids, so convert them to this platform's UUIDs before returning.
-	// "state" is a plain enum and is left as-is.
 	if req.GroupBy == "assignmentGroup" || req.GroupBy == "businessService" {
 		for i := range resp.Groups {
 			resp.Groups[i].Key = sysidToUUID(resp.Groups[i].Key)
+		}
+	}
+	// "state" is a plain enum, but SN's own groupBy implementation returns
+	// its raw numeric state value (as a string) as the bucket key, not this
+	// platform's domain enum string. Parse it back to the numeric SN state
+	// ID and look it up in snIncidentStateLabelMap (SN numeric ID -> domain
+	// label string), the same map used elsewhere in this file to build
+	// Incident.State from sn.State.ID.
+	if req.GroupBy == "state" {
+		for i := range resp.Groups {
+			id, err := strconv.Atoi(resp.Groups[i].Key)
+			if err != nil {
+				// Leave the key as-is if it isn't the numeric string we expect.
+				continue
+			}
+			if label, ok := snIncidentStateLabelMap[id]; ok {
+				resp.Groups[i].Key = label
+			}
+			// else: leave the key as-is, mirroring this file's own
+			// defensive fallback for an unrecognized state ID.
 		}
 	}
 	return resp, nil
@@ -819,7 +845,23 @@ func (s *snIncidentService) CreateIncident(ctx context.Context, req domain.Creat
 // Any failure is logged and does not fail CreateIncident itself: the
 // incident already exists in ServiceNow by this point.
 func (s *snIncidentService) publishIncidentCreated(ctx context.Context, req domain.CreateIncidentRequest, incidentID string) {
-	if s.publisher == nil {
+	publishIncidentCreatedEvent(ctx, s.publisher, req, incidentID)
+}
+
+// publishIncidentCreatedEvent is publishIncidentCreated's actual body,
+// factored out to a package-level function so
+// incidentService.createIncidentSNFirst (DATA_SOURCE=postgres-servicenow-dual-write)
+// can call it too, AFTER its own Postgres insert succeeds, rather than
+// relying on snIncidentService's own automatic publish -- which fires right
+// after the ServiceNow POST returns, before that Postgres insert has even
+// been attempted. A consumer could otherwise receive incident.created for an
+// incident the Postgres-backed read API (the only one live in this mode)
+// cannot yet, or ever, return -- CodeRabbit correctly flagged this on PR
+// #1922. publisher may be nil (e.g. the dual-write mirror instance is
+// constructed with publisher=nil specifically so its own CreateIncident
+// never double-publishes -- see routes.go's incident DataSource wiring).
+func publishIncidentCreatedEvent(ctx context.Context, publisher EventPublisherService, req domain.CreateIncidentRequest, incidentID string) {
+	if publisher == nil {
 		return
 	}
 	ctx, cancel := context.WithTimeout(ctx, publishIncidentCreatedTimeout)
@@ -838,7 +880,7 @@ func (s *snIncidentService) publishIncidentCreated(ctx context.Context, req doma
 		slog.ErrorContext(ctx, "sn create incident: encode incident.created payload failed", "incidentId", incidentID, "error", err)
 		return
 	}
-	if err := s.publisher.Publish(ctx, events.TypeIncidentCreated, incidentID, payload); err != nil {
+	if err := publisher.Publish(ctx, events.TypeIncidentCreated, incidentID, payload); err != nil {
 		// Not logging err itself: it can carry a raw Event Hub client error
 		// (potentially including connection/broker details), and this
 		// service's own convention is to log only ids and sanitised

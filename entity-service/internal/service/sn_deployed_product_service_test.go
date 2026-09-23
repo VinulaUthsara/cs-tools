@@ -57,7 +57,7 @@ func TestSNDeployedProductService_SearchDeployedProducts_MapsCategoryFromReferen
 	})
 
 	client := newTestSNClient(t, mux)
-	svc := NewServiceNowDeployedProductService(client)
+	svc := NewServiceNowDeployedProductService(client, nil, nil)
 
 	resp, err := svc.SearchDeployedProducts(contextWithUserIDToken("token"), domain.SearchDeployedProductsRequest{
 		Pagination: domain.Pagination{Limit: 20, Offset: 0},
@@ -93,7 +93,7 @@ func TestSNDeployedProductService_SearchDeployedProducts_NilCategoryStaysNil(t *
 	})
 
 	client := newTestSNClient(t, mux)
-	svc := NewServiceNowDeployedProductService(client)
+	svc := NewServiceNowDeployedProductService(client, nil, nil)
 
 	resp, err := svc.SearchDeployedProducts(contextWithUserIDToken("token"), domain.SearchDeployedProductsRequest{
 		Pagination: domain.Pagination{Limit: 20, Offset: 0},
@@ -139,7 +139,7 @@ func TestSNDeployedProductService_SearchDeployedProducts_CoresTPSNumericAndUpdat
 	})
 
 	client := newTestSNClient(t, mux)
-	svc := NewServiceNowDeployedProductService(client)
+	svc := NewServiceNowDeployedProductService(client, nil, nil)
 
 	resp, err := svc.SearchDeployedProducts(contextWithUserIDToken("token"), domain.SearchDeployedProductsRequest{
 		Pagination: domain.Pagination{Limit: 20, Offset: 0},
@@ -193,7 +193,7 @@ func TestSNDeployedProductService_SearchDeployedProducts_NilUpdatesStaysNil(t *t
 	})
 
 	client := newTestSNClient(t, mux)
-	svc := NewServiceNowDeployedProductService(client)
+	svc := NewServiceNowDeployedProductService(client, nil, nil)
 
 	resp, err := svc.SearchDeployedProducts(contextWithUserIDToken("token"), domain.SearchDeployedProductsRequest{
 		Pagination: domain.Pagination{Limit: 20, Offset: 0},
@@ -203,6 +203,84 @@ func TestSNDeployedProductService_SearchDeployedProducts_NilUpdatesStaysNil(t *t
 	}
 	if resp.DeployedProducts[0].Updates != nil {
 		t.Fatalf("expected nil Updates, got %+v", resp.DeployedProducts[0].Updates)
+	}
+}
+
+// TestSNDeployedProductService_SearchDeployedProducts_ForwardsProductCategories proves a
+// request with ProductCategories set is forwarded to the backing service's filters as
+// "productCategories", combined with any deploymentIds filter rather than replacing it.
+func TestSNDeployedProductService_SearchDeployedProducts_ForwardsProductCategories(t *testing.T) {
+	var gotBody map[string]any
+	mux := http.NewServeMux()
+	mux.HandleFunc("/deployed-products/search", func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"deployedProducts": []map[string]any{},
+			"totalRecords":     0, "offset": 0, "limit": 20,
+		})
+	})
+
+	client := newTestSNClient(t, mux)
+	svc := NewServiceNowDeployedProductService(client, nil, nil)
+
+	deploymentUUID := sysidToUUID(testDeployedProductDeploySysid)
+	_, err := svc.SearchDeployedProducts(contextWithUserIDToken("token"), domain.SearchDeployedProductsRequest{
+		Pagination:        domain.Pagination{Limit: 20, Offset: 0},
+		DeploymentIDs:     []string{deploymentUUID},
+		ProductCategories: []string{"pdp"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	filters, ok := gotBody["filters"].(map[string]any)
+	if !ok {
+		t.Fatalf("outbound payload has no filters object (body: %v)", gotBody)
+	}
+	gotCategories, ok := filters["productCategories"].([]any)
+	if !ok || len(gotCategories) != 1 || gotCategories[0] != "pdp" {
+		t.Fatalf("filters.productCategories = %v, want [\"pdp\"]", filters["productCategories"])
+	}
+	gotDeploymentIDs, ok := filters["deploymentIds"].([]any)
+	if !ok || len(gotDeploymentIDs) != 1 || gotDeploymentIDs[0] != testDeployedProductDeploySysid {
+		t.Fatalf("filters.deploymentIds = %v, want [%q]", filters["deploymentIds"], testDeployedProductDeploySysid)
+	}
+}
+
+// TestSNDeployedProductService_SearchDeployedProducts_NilProductCategoriesOmitted proves an
+// absent ProductCategories field is omitted from the outbound filters entirely (backward
+// compatible with callers that never set it).
+func TestSNDeployedProductService_SearchDeployedProducts_NilProductCategoriesOmitted(t *testing.T) {
+	var gotBody map[string]any
+	mux := http.NewServeMux()
+	mux.HandleFunc("/deployed-products/search", func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"deployedProducts": []map[string]any{},
+			"totalRecords":     0, "offset": 0, "limit": 20,
+		})
+	})
+
+	client := newTestSNClient(t, mux)
+	svc := NewServiceNowDeployedProductService(client, nil, nil)
+
+	_, err := svc.SearchDeployedProducts(contextWithUserIDToken("token"), domain.SearchDeployedProductsRequest{
+		Pagination: domain.Pagination{Limit: 20, Offset: 0},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	filters, ok := gotBody["filters"].(map[string]any)
+	if !ok {
+		t.Fatalf("outbound payload has no filters object (body: %v)", gotBody)
+	}
+	if _, present := filters["productCategories"]; present {
+		t.Fatalf("filters.productCategories = %v, want the key omitted entirely", filters["productCategories"])
 	}
 }
 
@@ -237,7 +315,7 @@ func TestSNDeployedProductService_UpdateDeployedProduct_UpdatesRoundTrip(t *test
 	})
 
 	client := newTestSNClient(t, mux)
-	svc := NewServiceNowDeployedProductService(client)
+	svc := NewServiceNowDeployedProductService(client, nil, nil)
 
 	req := domain.UpdateDeployedProductRequest{
 		ID: productUUID,
@@ -292,7 +370,7 @@ func TestSNDeployedProductService_UpdateDeployedProduct_UpdatesAloneSatisfiesDet
 	})
 
 	client := newTestSNClient(t, mux)
-	svc := NewServiceNowDeployedProductService(client)
+	svc := NewServiceNowDeployedProductService(client, nil, nil)
 
 	req := domain.UpdateDeployedProductRequest{
 		ID:      productUUID,
@@ -328,7 +406,7 @@ func TestSNDeployedProductService_UpdateDeployedProduct_EmptyUpdatesArrayClearsH
 	})
 
 	client := newTestSNClient(t, mux)
-	svc := NewServiceNowDeployedProductService(client)
+	svc := NewServiceNowDeployedProductService(client, nil, nil)
 
 	req := domain.UpdateDeployedProductRequest{
 		ID:      productUUID,
@@ -392,7 +470,7 @@ func TestSNDeployedProductService_UpdateDeployedProduct_ValidatesUpdateEntries(t
 					},
 				})
 			}))
-			svc := NewServiceNowDeployedProductService(client)
+			svc := NewServiceNowDeployedProductService(client, nil, nil)
 
 			req := domain.UpdateDeployedProductRequest{ID: productUUID, Updates: tc.updates}
 			_, err := svc.UpdateDeployedProduct(contextWithUserIDToken("token"), req)

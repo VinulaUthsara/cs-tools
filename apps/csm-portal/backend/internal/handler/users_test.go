@@ -25,6 +25,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/wso2-open-operations/cs-tools/apps/csm-portal/backend/internal/middleware"
 	"github.com/wso2-open-operations/cs-tools/apps/csm-portal/backend/internal/scim"
 )
 
@@ -244,6 +245,99 @@ func TestGetMeSftpgoAttachmentStorageEnabled(t *testing.T) {
 			}
 		})
 	}
+}
+
+// meBody is the part of the GET /users/me response these tests inspect.
+type meBody struct {
+	Roles *[]string `json:"roles"`
+}
+
+// getMeAs calls GET /users/me for a caller whose token carries tokenRoles and
+// whose email is email, against an entity service that reports entityBody.
+func getMeAs(t *testing.T, h *UsersHandler, email string, tokenRoles []string) meBody {
+	t.Helper()
+	user := &middleware.UserInfo{Email: email, UserID: "u-1", Roles: tokenRoles}
+	r := httptest.NewRequest(http.MethodGet, "/users/me", nil)
+	r = r.WithContext(middleware.WithUserInfo(r.Context(), user))
+	w := httptest.NewRecorder()
+	h.GetMe(w, r)
+	assertStatus(t, w, http.StatusOK)
+	return decodeJSON[meBody](t, w)
+}
+
+func joined(l *[]string) string {
+	if l == nil {
+		return "<null>"
+	}
+	return strings.Join(*l, ",")
+}
+
+// TestGetMeRoles verifies GET /users/me reports the portal roles the caller's
+// token roles grant, always as an array, and that a caller holding no portal
+// role still gets a profile rather than an error.
+func TestGetMeRoles(t *testing.T) {
+	newHandler := func(t *testing.T, entity *mockEntityUserClient, cfg AccessConfig) *UsersHandler {
+		return NewUsersHandler(&mockSCIMClient{}, entity, testDirectory(t), false).WithAccessGuard(NewAccessGuard(cfg))
+	}
+	def := testAccessConfig()
+
+	t.Run("reports the portal role the token role grants", func(t *testing.T) {
+		resp := getMeAs(t, newHandler(t, &mockEntityUserClient{}, def), "agent@example.com", []string{"test-escalator"})
+		if joined(resp.Roles) != "escalator" {
+			t.Errorf("roles = %s, want escalator", joined(resp.Roles))
+		}
+	})
+
+	t.Run("a caller can hold several roles, and unrelated token roles are ignored", func(t *testing.T) {
+		resp := getMeAs(t, newHandler(t, &mockEntityUserClient{}, def), "agent@example.com",
+			[]string{"test-support-engineer", "test-usage-metrics-viewer", "wso2-everyone"})
+		if joined(resp.Roles) != "support_engineer,usage_metrics_viewer" {
+			t.Errorf("roles = %s, want support_engineer,usage_metrics_viewer", joined(resp.Roles))
+		}
+	})
+
+	t.Run("the entity service's own roles are not reported", func(t *testing.T) {
+		entity := &mockEntityUserClient{
+			getUserMeFn: func(_ context.Context) ([]byte, error) {
+				return []byte(`{"id":"u-1","email":"agent@example.com","lastName":"Doe","roles":["internal","admin"]}`), nil
+			},
+		}
+		resp := getMeAs(t, newHandler(t, entity, def), "agent@example.com", []string{"test-viewer"})
+		if joined(resp.Roles) != "viewer" {
+			t.Errorf("roles = %s, want only viewer: the entity roles must not leak in", joined(resp.Roles))
+		}
+	})
+
+	t.Run("the dashboard designer role is reported", func(t *testing.T) {
+		resp := getMeAs(t, newHandler(t, &mockEntityUserClient{}, def), "agent@example.com", []string{"test-dashboard-designer"})
+		if joined(resp.Roles) != "dashboard_designer" {
+			t.Errorf("roles = %s, want dashboard_designer", joined(resp.Roles))
+		}
+	})
+
+	t.Run("a caller holding no portal role gets an empty array, not null", func(t *testing.T) {
+		resp := getMeAs(t, newHandler(t, &mockEntityUserClient{}, def), "agent@example.com", []string{"wso2-everyone"})
+		if resp.Roles == nil || len(*resp.Roles) != 0 {
+			t.Errorf("roles = %s, want an empty non-null array", joined(resp.Roles))
+		}
+	})
+
+	t.Run("no guard wired reports an empty array, not null", func(t *testing.T) {
+		h := NewUsersHandler(&mockSCIMClient{}, &mockEntityUserClient{}, testDirectory(t), false)
+		resp := getMeAs(t, h, "agent@example.com", []string{"test-admin"})
+		if resp.Roles == nil || len(*resp.Roles) != 0 {
+			t.Errorf("roles = %s, want an empty non-null array", joined(resp.Roles))
+		}
+	})
+
+	t.Run("honours configured role names", func(t *testing.T) {
+		cfg := testAccessConfig()
+		cfg.Admin = []string{"corp-csm-admins"}
+		resp := getMeAs(t, newHandler(t, &mockEntityUserClient{}, cfg), "agent@example.com", []string{"corp-csm-admins"})
+		if joined(resp.Roles) != "admin" {
+			t.Errorf("roles = %s, want admin", joined(resp.Roles))
+		}
+	})
 }
 
 // ----- PatchMe -----

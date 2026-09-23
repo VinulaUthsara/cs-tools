@@ -35,7 +35,6 @@ import (
 var testUser = &middleware.UserInfo{
 	Email:  "agent@example.com",
 	UserID: "f2d9bf5b-7067-43dc-8578-802c8623af5d",
-	Groups: []string{"csm-agents"},
 }
 
 // testPlatformUserID is the id GET /users/me resolves for testUser: the
@@ -124,6 +123,25 @@ type mockEntityCaseClient struct {
 	removeCaseTagFn            func(ctx context.Context, caseID, tagID string) ([]byte, error)
 	searchTagsFn               func(ctx context.Context, body []byte) ([]byte, error)
 	getUserMeFn                func(ctx context.Context) ([]byte, error)
+	// getChangeRequestFn/getIncidentFn back the attachmentStorageEntityClient
+	// interface (see attachment_storage.go) so this same mock serves
+	// AttachmentStorageHandler's per-reference-type access checks.
+	getChangeRequestFn func(ctx context.Context, id string) ([]byte, error)
+	getIncidentFn      func(ctx context.Context, id string) ([]byte, error)
+}
+
+func (m *mockEntityCaseClient) GetChangeRequest(ctx context.Context, id string) ([]byte, error) {
+	if m.getChangeRequestFn != nil {
+		return m.getChangeRequestFn(ctx, id)
+	}
+	return []byte(`{}`), nil
+}
+
+func (m *mockEntityCaseClient) GetIncident(ctx context.Context, id string) ([]byte, error) {
+	if m.getIncidentFn != nil {
+		return m.getIncidentFn(ctx, id)
+	}
+	return []byte(`{}`), nil
 }
 
 // GetUserMe defaults to the platform user record for testUser: note the id is
@@ -953,12 +971,13 @@ func (m *mockEntityTimeCardClient) DeleteTimeCard(ctx context.Context, id string
 // ----- mock entity deployment client -----
 
 type mockEntityDeploymentClient struct {
-	postDeploymentFn         func(ctx context.Context, body []byte) ([]byte, error)
-	searchDeploymentsFn      func(ctx context.Context, body []byte) ([]byte, error)
-	searchDeployedProductsFn func(ctx context.Context, body []byte) ([]byte, error)
-	patchDeploymentFn        func(ctx context.Context, deploymentID string, body []byte) ([]byte, error)
-	postDeployedProductFn    func(ctx context.Context, body []byte) ([]byte, error)
-	patchDeployedProductFn   func(ctx context.Context, deployedProductID string, body []byte) ([]byte, error)
+	postDeploymentFn                 func(ctx context.Context, body []byte) ([]byte, error)
+	searchDeploymentsFn              func(ctx context.Context, body []byte) ([]byte, error)
+	searchDeployedProductsFn         func(ctx context.Context, body []byte) ([]byte, error)
+	searchProjectsByProductVersionFn func(ctx context.Context, body []byte) ([]byte, error)
+	patchDeploymentFn                func(ctx context.Context, deploymentID string, body []byte) ([]byte, error)
+	postDeployedProductFn            func(ctx context.Context, body []byte) ([]byte, error)
+	patchDeployedProductFn           func(ctx context.Context, deployedProductID string, body []byte) ([]byte, error)
 }
 
 func (m *mockEntityDeploymentClient) PostDeployment(ctx context.Context, body []byte) ([]byte, error) {
@@ -978,6 +997,13 @@ func (m *mockEntityDeploymentClient) SearchDeployments(ctx context.Context, body
 func (m *mockEntityDeploymentClient) SearchDeployedProducts(ctx context.Context, body []byte) ([]byte, error) {
 	if m.searchDeployedProductsFn != nil {
 		return m.searchDeployedProductsFn(ctx, body)
+	}
+	return []byte(`{}`), nil
+}
+
+func (m *mockEntityDeploymentClient) SearchProjectsByProductVersion(ctx context.Context, body []byte) ([]byte, error) {
+	if m.searchProjectsByProductVersionFn != nil {
+		return m.searchProjectsByProductVersionFn(ctx, body)
 	}
 	return []byte(`{}`), nil
 }

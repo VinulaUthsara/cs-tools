@@ -47,13 +47,15 @@ func newDirectoryRouter(t *testing.T) http.Handler {
 	srv := httptest.NewServer(upstream)
 	t.Cleanup(srv.Close)
 
-	router, _ := NewRouter(nil, &config.Config{
+	cfg := &config.Config{
 		DataSource:                               config.DataSourceServiceNow,
 		ServiceNowIntegrationServiceBaseURL:      srv.URL,
 		ServiceNowIntegrationServiceTokenURL:     srv.URL + "/oauth2/token",
 		ServiceNowIntegrationServiceClientID:     "test-client",
 		ServiceNowIntegrationServiceClientSecret: "test-secret",
-	})
+	}
+	withTestAuth(t, cfg)
+	router, _ := NewRouter(nil, cfg)
 	return router
 }
 
@@ -75,6 +77,23 @@ func TestGroupsSearch_IsStillALiveQuery(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), "Some Group") {
 		t.Fatalf("groups response = %s, want the upstream row", rec.Body.String())
+	}
+}
+
+// TestPostgresOnlyRoutesAreAbsentWithoutAPool pins that SN-mode startup
+// without a reachable database must not register the side-table routes.
+func TestPostgresOnlyRoutesAreAbsentWithoutAPool(t *testing.T) {
+	router := newDirectoryRouter(t)
+	for _, path := range []string{
+		"/event-publish-failures/search",
+		"/scheduled-tasks/attempts",
+		"/salesforce/events",
+		"/onboarding-steps/search",
+	} {
+		rec := postDirectory(t, router, path, `{}`)
+		if rec.Code != http.StatusNotFound {
+			t.Errorf("POST %s = %d, want 404 when the pool is nil", path, rec.Code)
+		}
 	}
 }
 
