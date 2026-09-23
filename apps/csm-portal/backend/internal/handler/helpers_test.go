@@ -21,9 +21,12 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
 
 	"github.com/wso2-open-operations/cs-tools/apps/csm-portal/backend/internal/directory"
+	"github.com/wso2-open-operations/cs-tools/apps/csm-portal/backend/internal/employeeinfo"
+	"github.com/wso2-open-operations/cs-tools/apps/csm-portal/backend/internal/entity"
 	"github.com/wso2-open-operations/cs-tools/apps/csm-portal/backend/internal/middleware"
 	"github.com/wso2-open-operations/cs-tools/apps/csm-portal/backend/internal/scim"
 	"github.com/wso2-open-operations/cs-tools/apps/csm-portal/backend/internal/updates"
@@ -1088,4 +1091,78 @@ func (m *mockEntityTaskClient) UpdateTask(ctx context.Context, id string, body [
 		return m.updateTaskFn(ctx, id, body)
 	}
 	return []byte(`{"id":"11111111-1111-1111-1111-111111111111"}`), nil
+}
+
+// ----- mock employee-info client (spl_user_info.go, spl_abt_team_members.go) -----
+
+type mockEmployeeInfoClient struct {
+	getEmployeeDataFn func(ctx context.Context, workEmail string) (*employeeinfo.Employee, error)
+}
+
+func (m *mockEmployeeInfoClient) GetEmployeeData(ctx context.Context, workEmail string) (*employeeinfo.Employee, error) {
+	if m.getEmployeeDataFn != nil {
+		return m.getEmployeeDataFn(ctx, workEmail)
+	}
+	return &employeeinfo.Employee{FirstName: "Test", LastName: "User"}, nil
+}
+
+// ----- mock sales/CS entity clients (spl_user_scan.go) -----
+
+type mockSalesEntityClient struct {
+	getContactByEmailFn    func(ctx context.Context, email string) (*entity.Contact, error)
+	getSubscriptionByKeyFn func(ctx context.Context, subscriptionKey string) (*entity.Subscription, error)
+}
+
+func (m *mockSalesEntityClient) GetContactByEmail(ctx context.Context, email string) (*entity.Contact, error) {
+	if m.getContactByEmailFn != nil {
+		return m.getContactByEmailFn(ctx, email)
+	}
+	return nil, nil
+}
+
+func (m *mockSalesEntityClient) GetSubscriptionByKey(ctx context.Context, subscriptionKey string) (*entity.Subscription, error) {
+	if m.getSubscriptionByKeyFn != nil {
+		return m.getSubscriptionByKeyFn(ctx, subscriptionKey)
+	}
+	return nil, nil
+}
+
+type mockCSEntityClient struct {
+	getUserByEmailFn           func(ctx context.Context, email string) (*entity.User, error)
+	getProjectByProjectKeyFn   func(ctx context.Context, projectKey string) (*entity.Project, error)
+	getProjectContactByEmailFn func(ctx context.Context, email, projectID string) (*entity.ProjectContact, error)
+}
+
+func (m *mockCSEntityClient) GetUserByEmail(ctx context.Context, email string) (*entity.User, error) {
+	if m.getUserByEmailFn != nil {
+		return m.getUserByEmailFn(ctx, email)
+	}
+	return nil, nil
+}
+
+func (m *mockCSEntityClient) GetProjectByProjectKey(ctx context.Context, projectKey string) (*entity.Project, error) {
+	if m.getProjectByProjectKeyFn != nil {
+		return m.getProjectByProjectKeyFn(ctx, projectKey)
+	}
+	return nil, nil
+}
+
+func (m *mockCSEntityClient) GetProjectContactByEmail(ctx context.Context, email, projectID string) (*entity.ProjectContact, error) {
+	if m.getProjectContactByEmailFn != nil {
+		return m.getProjectContactByEmailFn(ctx, email, projectID)
+	}
+	return nil, nil
+}
+
+// ----- mock ServiceNow client (spl_abt_team_members.go) -----
+
+type mockABTTeamMembersServiceNowClient struct {
+	tableQueryFn func(ctx context.Context, table string, params url.Values) ([]byte, error)
+}
+
+func (m *mockABTTeamMembersServiceNowClient) TableQuery(ctx context.Context, table string, params url.Values) ([]byte, error) {
+	if m.tableQueryFn != nil {
+		return m.tableQueryFn(ctx, table, params)
+	}
+	return []byte(`{"result":[]}`), nil
 }
