@@ -60,6 +60,19 @@ type UsersHandler struct {
 	// tell whether AttachmentStorageHandler's routes are reachable without
 	// probing them.
 	sftpgoAttachmentStorageEnabled bool
+	// access resolves the caller's token roles into the portal roles GET
+	// /users/me reports. nil (every existing call site and test) reports none;
+	// cmd/server/main.go sets it with WithAccessGuard.
+	access *AccessGuard
+}
+
+// WithAccessGuard makes GET /users/me report the portal roles the caller's
+// token roles grant, using the same guard that authorises every route, so
+// what the frontend is told and what the backend enforces cannot disagree.
+// Returns h for chaining at the construction site.
+func (h *UsersHandler) WithAccessGuard(g *AccessGuard) *UsersHandler {
+	h.access = g
+	return h
 }
 
 // NewUsersHandler creates a UsersHandler backed by the given SCIM and entity
@@ -68,17 +81,26 @@ type UsersHandler struct {
 // register AttachmentStorageHandler's routes (SFTPGO_ATTACHMENT_STORAGE_ENABLED),
 // so GET /users/me can tell the frontend whether those routes are reachable.
 func NewUsersHandler(scim scimClient, entity entityUserClient, dir *directory.Directory, sftpgoAttachmentStorageEnabled bool) *UsersHandler {
-	return &UsersHandler{scim: scim, entity: entity, dir: dir, sftpgoAttachmentStorageEnabled: sftpgoAttachmentStorageEnabled}
+	return &UsersHandler{
+		scim:                           scim,
+		entity:                         entity,
+		dir:                            dir,
+		sftpgoAttachmentStorageEnabled: sftpgoAttachmentStorageEnabled,
+	}
 }
 
 // userMeResponse is the GET /users/me response shape.
 type userMeResponse struct {
-	ID          *string           `json:"id,omitempty"`
-	Email       string            `json:"email"`
-	FirstName   *string           `json:"firstName,omitempty"`
-	LastName    *string           `json:"lastName,omitempty"`
-	TimeZone    *string           `json:"timeZone,omitempty"`
-	Roles       []string          `json:"roles,omitempty"`
+	ID        *string `json:"id,omitempty"`
+	Email     string  `json:"email"`
+	FirstName *string `json:"firstName,omitempty"`
+	LastName  *string `json:"lastName,omitempty"`
+	TimeZone  *string `json:"timeZone,omitempty"`
+	// Roles is which portal roles (viewer, support_engineer, admin, ...) the
+	// caller's token roles grant: several are possible. It is not the entity
+	// service's role data, which this response no longer carries. Always
+	// present, [] when they hold none.
+	Roles       []string          `json:"roles"`
 	PhoneNumber *string           `json:"phoneNumber,omitempty"`
 	Team        *userTeamResponse `json:"team,omitempty"`
 	// SftpgoAttachmentStorageEnabled mirrors the backend's
@@ -112,12 +134,11 @@ type entityGroupRef struct {
 
 // entityUserMeResponse is the subset of the entity GET /users/me response we care about.
 type entityUserMeResponse struct {
-	ID        string   `json:"id"`
-	Email     string   `json:"email"`
-	FirstName *string  `json:"firstName"`
-	LastName  string   `json:"lastName"`
-	TimeZone  *string  `json:"timeZone"`
-	Roles     []string `json:"roles"`
+	ID        string  `json:"id"`
+	Email     string  `json:"email"`
+	FirstName *string `json:"firstName"`
+	LastName  string  `json:"lastName"`
+	TimeZone  *string `json:"timeZone"`
 	// Groups is every group the caller belongs to, or absent when the upstream
 	// membership lookup failed. The team is derived from it here rather than
 	// upstream, since the registry lives in this service.
@@ -149,6 +170,10 @@ func (h *UsersHandler) GetMe(w http.ResponseWriter, r *http.Request) {
 	resp := userMeResponse{
 		Email:                          user.Email,
 		SftpgoAttachmentStorageEnabled: h.sftpgoAttachmentStorageEnabled,
+		Roles:                          []string{},
+	}
+	if h.access != nil {
+		resp.Roles = h.access.RolesFor(user.Roles)
 	}
 
 	entityRaw, err := h.entity.GetUserMe(r.Context())
@@ -169,9 +194,6 @@ func (h *UsersHandler) GetMe(w http.ResponseWriter, r *http.Request) {
 		resp.FirstName = entityResp.FirstName
 		resp.LastName = &entityResp.LastName
 		resp.TimeZone = entityResp.TimeZone
-		if entityResp.Roles != nil {
-			resp.Roles = entityResp.Roles
-		}
 		resp.Team = h.teamForGroups(entityResp.Groups)
 	}
 

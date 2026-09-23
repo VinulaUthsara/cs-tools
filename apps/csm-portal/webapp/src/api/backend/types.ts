@@ -140,7 +140,12 @@ export type BeCaseCause =
   | "INFRASTRUCTURE_OTHER"
   | "UNKNOWN";
 
-export type BeCaseSortField = "createdOn" | "updatedOn" | "severity" | "state";
+export type BeCaseSortField =
+  | "createdOn"
+  | "updatedOn"
+  | "severity"
+  | "state"
+  | "assignee";
 
 /**
  * Where a case sits in the backing data source's staged auto-closure sequence
@@ -1249,13 +1254,6 @@ export interface BeCaseCommentCreatePayload {
   type: BeCreatableCommentType;
   /** Rich-text HTML body. */
   content: string;
-  /**
-   * User ids (the platform's own UUID-form user id, the same shape returned
-   * by `GET /users/{id}` and `POST /users/search`) that the comment's author
-   * @mentioned in `content`, as selected by the mention-typeahead. Optional:
-   * absent or empty means no mentions.
-   */
-  mentionedUserIds?: string[];
 }
 
 export interface BeCaseCommentSearchPayload {
@@ -1531,6 +1529,15 @@ export interface BeAttachmentUploadTokenRequest {
   mimeType: string;
   sizeBytes: number;
   description?: string | null;
+  /**
+   * Reference entity type for the attachment being minted. Optional; the BE
+   * defaults to `"case"` when omitted. Only `"case"` is actually supported by
+   * direct-upload storage today — `"change_request"`/`"incident"` are
+   * authorized but rejected with a deterministic 422, so the webapp routes
+   * those two through the legacy base64 path instead of calling this
+   * endpoint at all.
+   */
+  referenceType?: BeReferenceType;
 }
 
 /**
@@ -1732,10 +1739,17 @@ export interface BeProject {
   sfId?: string;
   name?: string;
   projectKey?: string;
+  /** The project's short key, e.g. "WSO2-1000" (ServiceNow/entity-service field name: `key`). */
+  key?: string;
   subscriptionType?: BeSubscriptionType;
   /** Whether this project is eligible to raise service requests, as
-   *  precomputed by the backing data source. */
+   *  precomputed by the backing data source. Distinct from
+   *  `BeProjectMetadata.features.hasServiceRequestReadAccess`, a
+   *  viewer-permission flag rather than a project eligibility flag — gate SR
+   *  creation on both. */
   hasSr?: boolean;
+  /** "Open" | "Suspended" | "Restricted" (ServiceNow data source only). */
+  closureState?: string | null;
   startDate?: string | null;
   endDate?: string | null;
   createdAt?: string;
@@ -1747,6 +1761,12 @@ export interface BeProjectSearchPayload {
   searchQuery?: string;
   /** Filter to projects belonging to this account (ServiceNow data source only). */
   accountId?: string;
+  /** Excludes projects whose closure state is any of the given values, e.g.
+   *  ["Restricted", "Suspended"] (ServiceNow data source only). */
+  excludeClosureStates?: string[];
+  /** Excludes projects whose subscription type is any of the given values
+   *  (ServiceNow data source only). */
+  excludeSubscriptionTypes?: BeSubscriptionType[];
 }
 
 export interface BeProjectSearchResponse extends BeSearchResponseBase {
@@ -1761,6 +1781,14 @@ export interface BeProjectSearchResponse extends BeSearchResponseBase {
  */
 export interface BeProjectMetadata {
   features?: {
+    /**
+     * Whether the current viewer has read access to this project's service
+     * requests at all — a permission flag, distinct from `BeProject.hasSr`
+     * (see that field's doc comment) which is a project-level "can this
+     * project raise SRs" eligibility check. Gate SR creation UI on this
+     * being `true`, alongside `hasSr`.
+     */
+    hasServiceRequestReadAccess?: boolean;
     /**
      * Plain opaque category-code strings (not a named enum), matching the
      * entity service's own convention. When present and non-empty, only
@@ -1974,6 +2002,24 @@ export interface BeProductVersionSearchResponse extends BeSearchResponseBase {
   productVersions: BeProductVersion[];
 }
 
+/**
+ * `POST /deployed-products/projects/search` — resolves which projects are
+ * running a given product version, for the EOL/product-version announcement
+ * flow's audience. The result already excludes Restricted/Suspended projects
+ * and Cloud Support/Cloud Evaluation Support subscriptions unconditionally
+ * (see entity-service's own doc comment on this endpoint) — there is
+ * deliberately no exclude filter on this payload for the caller to set.
+ */
+export interface BeProjectsByProductVersionSearchPayload {
+  pagination?: BePagination;
+  productId: string;
+  productVersionId: string;
+}
+
+export interface BeProjectsByProductVersionSearchResponse extends BeSearchResponseBase {
+  projects: BeEntityRef[];
+}
+
 // ---------------------------------------------------------------------------
 // Deployed products (deployment ↔ product link)
 // ---------------------------------------------------------------------------
@@ -2012,6 +2058,13 @@ export interface BeDeployedProduct {
 
 export interface BeDeployedProductSearchPayload {
   pagination?: BePagination;
+  /**
+   * Restricts results to deployed products in one of these opaque category
+   * codes (e.g. "pdp"). Optional, combines with (does not replace) the
+   * deployment scoping the BFF injects server-side; omit for unfiltered
+   * results.
+   */
+  productCategories?: string[];
 }
 
 export interface BeDeployedProductSearchResponse extends BeSearchResponseBase {
@@ -2245,6 +2298,17 @@ export interface BeGithubIssueRepoOption {
  */
 export interface BeMetadataResponse {
   githubIssueRepoOptions: BeGithubIssueRepoOption[];
+}
+
+/**
+ * `GET /announcements/audience/excluded-project-keys` response: the
+ * read-only, backend-configured denylist of project keys that never receive
+ * an "All customer projects" customer announcement (see
+ * CSM_ANNOUNCEMENT_EXCLUDED_PROJECT_KEYS). Never null, even when nothing is
+ * configured — always a real (possibly empty) array.
+ */
+export interface BeExcludedProjectKeysResponse {
+  excludedProjectKeys: string[];
 }
 
 /** `POST /cases/{id}/call-requests/search` request body. */
@@ -2513,6 +2577,12 @@ export interface BeChangeRequestDetail extends BeChangeRequestSearchView {
    */
   changeRequestType?: { id: number; label: string } | null;
   likelihood?: { id: number; label: string } | null;
+  /**
+   * "Implementation Plan visible to customers" in this portal's UI. Writable
+   * on both {@link BeCreateChangeRequestPayload} and
+   * {@link BePatchChangeRequestPayload} — unlike `changeRequestType`/
+   * `likelihood` above, this one has a write path all the way down.
+   */
   isPlanningVisibleToCustomers?: boolean;
   confirmCustomerUpdatedDate?: string | null;
   customerUpdatedOn?: string | null;
@@ -2614,6 +2684,8 @@ export interface BeCreateChangeRequestPayload {
   plannedEndDate?: string;
   comment?: string;
   workNote?: string;
+  /** "Implementation Plan visible to customers" in this portal's UI. */
+  isPlanningVisibleToCustomers?: boolean;
 }
 
 /** `POST /change-requests` response — the created identifiers. */
@@ -2791,6 +2863,9 @@ export interface BePatchChangeRequestPayload {
   isCustomerApproved?: boolean;
   isCustomerReviewed?: boolean;
   assignedTeamId?: string;
+  /** Individual assignee (portal user UUID). Distinct from `assignedTeamId`
+   * (the assignment group) — a CR can carry both, one, or neither. */
+  assignedEngineerId?: string;
   requestApproval?: true;
   /**
    * Target lifecycle state, for a transition listed in the record's own
@@ -2843,6 +2918,8 @@ export interface BePatchChangeRequestPayload {
   rollbackDurationText?: string;
   customerGroupId?: string;
   requestedById?: string;
+  /** "Implementation Plan visible to customers" in this portal's UI. */
+  isPlanningVisibleToCustomers?: boolean;
 }
 
 /** `PATCH /change-requests/{id}` response — the touched identifiers. */
@@ -4015,6 +4092,21 @@ export interface BeDashboardWidget {
    * valid for that resourceType's own search contract; an invalid one is
    * rejected by that search endpoint, not caught here. */
   sortBy?: Record<string, unknown>;
+  /** Only meaningful for shapes "pie"/"bar": opts this widget into rendering
+   * a clicked slice's filtered list inline, below the chart, on the same
+   * tile — instead of navigating away to that resourceType's own list page
+   * (the existing, still-default behavior for every widget that omits
+   * this). See `DashboardWidgetTile`'s own `inlineDrilldown` prop. Absent/
+   * `false` is a no-op — every existing pie/bar widget's navigate-away
+   * click-through is unchanged. */
+  inlineDrilldown?: boolean;
+  /** Only meaningful for shape "pie": opts this widget into rendering each
+   * slice's own "{label} {value}" outside the ring, connected to its wedge
+   * by a leader line, instead of the default donut + separate legend list
+   * below it (no percentage shown in these outer labels). Absent/`false` is
+   * a no-op — every existing pie widget's donut+legend rendering is
+   * unchanged. See `DashboardPieChart`'s own `inlineLabels` prop. */
+  inlineLabels?: boolean;
 }
 
 /**

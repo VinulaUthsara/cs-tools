@@ -108,6 +108,89 @@ func (c *Client) CreateCaseComment(ctx context.Context, caseID string, body []by
 	return c.do(ctx, http.MethodPost, fmt.Sprintf("/cases/%s/comments", url.PathEscape(caseID)), body)
 }
 
+// SearchOpportunities calls POST /opportunities/search on the entity service.
+// ServiceNow data source only; a pure M2M call succeeds here, unlike UpdateProject —
+// this operation does not require a forwarded end-user identity token. Response is
+// returned as raw JSON; typed response structs are deferred.
+func (c *Client) SearchOpportunities(ctx context.Context, body []byte) ([]byte, error) {
+	return c.do(ctx, http.MethodPost, "/opportunities/search", body)
+}
+
+// GetOpportunity calls GET /opportunities/{id} on the entity service.
+// ServiceNow data source only; a pure M2M call succeeds here (read-only, no
+// forwarded identity required). Response is returned as raw JSON; typed response
+// structs are deferred.
+func (c *Client) GetOpportunity(ctx context.Context, id string) ([]byte, error) {
+	return c.do(ctx, http.MethodGet, fmt.Sprintf("/opportunities/%s", url.PathEscape(id)), nil)
+}
+
+// SearchInvoices calls POST /invoices/search on the entity service.
+// ServiceNow data source only; a pure M2M call succeeds here (read-only, no
+// forwarded identity required). Response is returned as raw JSON; typed response
+// structs are deferred.
+func (c *Client) SearchInvoices(ctx context.Context, body []byte) ([]byte, error) {
+	return c.do(ctx, http.MethodPost, "/invoices/search", body)
+}
+
+// GetInvoice calls GET /invoices/{id} on the entity service.
+// ServiceNow data source only; a pure M2M call succeeds here (read-only, no
+// forwarded identity required). Response is returned as raw JSON; typed response
+// structs are deferred.
+func (c *Client) GetInvoice(ctx context.Context, id string) ([]byte, error) {
+	return c.do(ctx, http.MethodGet, fmt.Sprintf("/invoices/%s", url.PathEscape(id)), nil)
+}
+
+// SearchProjectOpportunityLinks calls POST /project-opportunity-links/search on the
+// entity service. ServiceNow data source only; a pure M2M call succeeds here
+// (read-only, no forwarded identity required). There is no by-id fetch for this
+// resource — the underlying ServiceNow data has no single-record endpoint. Response
+// is returned as raw JSON; typed response structs are deferred.
+func (c *Client) SearchProjectOpportunityLinks(ctx context.Context, body []byte) ([]byte, error) {
+	return c.do(ctx, http.MethodPost, "/project-opportunity-links/search", body)
+}
+
+// CreateIncident calls POST /incidents on the entity service. This targets a
+// ServiceNow-backed operation that requires a forwarded end-user identity
+// token. This service is strictly M2M with no mechanism to carry one, so
+// entity-service is expected to reject this call with 401 — kept for
+// API-shape completeness so a real caller has somewhere stable to point at,
+// not because it currently succeeds. See UpdateProject's doc comment above
+// for the same situation. Response is returned as raw JSON; typed response
+// structs are deferred.
+func (c *Client) CreateIncident(ctx context.Context, body []byte) ([]byte, error) {
+	return c.do(ctx, http.MethodPost, "/incidents", body)
+}
+
+// SearchIncidents calls POST /incidents/search on the entity service. This
+// targets a ServiceNow-backed operation that requires a forwarded end-user
+// identity token, same as CreateIncident above — this service cannot supply
+// one, so entity-service is expected to reject this call with 401. Kept for
+// API-shape completeness, not because it currently succeeds. Response is
+// returned as raw JSON; typed response structs are deferred.
+func (c *Client) SearchIncidents(ctx context.Context, body []byte) ([]byte, error) {
+	return c.do(ctx, http.MethodPost, "/incidents/search", body)
+}
+
+// CreateAlertIncidentMapping calls POST /alert-incident-mappings on the entity
+// service. Unlike CreateIncident/SearchIncidents above, this targets a
+// Postgres-only entity-service operation with no ServiceNow dependency and no
+// requirement for a forwarded end-user identity token — this service's M2M
+// identity to entity-service is sufficient, so this call is expected to
+// actually succeed today. Response is returned as raw JSON; typed response
+// structs are deferred.
+func (c *Client) CreateAlertIncidentMapping(ctx context.Context, body []byte) ([]byte, error) {
+	return c.do(ctx, http.MethodPost, "/alert-incident-mappings", body)
+}
+
+// LookupAlertIncidentMappings calls POST /alert-incident-mappings/lookup on
+// the entity service. Same Postgres-only, M2M-friendly situation as
+// CreateAlertIncidentMapping above — no forwarded end-user identity is
+// required, so this call is expected to actually succeed today. Response is
+// returned as raw JSON; typed response structs are deferred.
+func (c *Client) LookupAlertIncidentMappings(ctx context.Context, body []byte) ([]byte, error) {
+	return c.do(ctx, http.MethodPost, "/alert-incident-mappings/lookup", body)
+}
+
 // SyncProductVulnerabilities calls POST /products/vulnerabilities/sync on the entity
 // service. This is a full-replace sync: the caller must submit the complete current set
 // of product-vulnerability records on every call, not an incremental delta — the

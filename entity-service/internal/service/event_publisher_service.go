@@ -48,7 +48,8 @@ type eventPublisherService struct {
 // apps/csm-portal/backend's own internal/eventpublisher.Publisher — which
 // has to record a failed publish via an HTTP call to this service's
 // POST /event-publish-failures — failures is called in-process here, since
-// this service is the one that already owns that table.
+// this service is the one that already owns that table. failures may be
+// nil when no Postgres pool is available; Publish then skips recording.
 func NewEventPublisherService(kafka kafkaProducer, failures EventPublishFailureService) EventPublisherService {
 	return &eventPublisherService{kafka: kafka, failures: failures}
 }
@@ -73,6 +74,16 @@ func (s *eventPublisherService) Publish(ctx context.Context, eventType events.Ty
 	pubErr := s.kafka.Publish(ctx, []byte(entityID), body)
 	if pubErr == nil {
 		return nil
+	}
+
+	// failures is nil when no database is configured, which is legal when
+	// DATA_SOURCE=servicenow (see config.Config.HasDatabase). There is nowhere
+	// durable to record the failure in that case, so log loudly and return the
+	// original publish error — the alternative, dereferencing a nil service,
+	// would turn a recoverable publish failure into a panic.
+	if s.failures == nil {
+		slog.ErrorContext(ctx, "eventpublisher: publish failed and no database is configured to record it", "eventType", eventType, "entityId", entityID, "publishErr", pubErr)
+		return fmt.Errorf("eventpublisher: publish %s for entity %s: %w", eventType, entityID, pubErr)
 	}
 
 	recordCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), recordFailureTimeout)

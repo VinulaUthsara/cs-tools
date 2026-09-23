@@ -60,6 +60,15 @@ type dashboardWidgetView struct {
 	// request's "sortBy" instead of its "filters".
 	Columns []dashboard.Column `json:"columns,omitempty"`
 	SortBy  map[string]any     `json:"sortBy,omitempty"`
+	// InlineDrilldown is only meaningful for Shape "pie"/"bar" — see
+	// dashboard.WidgetTemplate.InlineDrilldown. Forwarded verbatim: the
+	// frontend, not this backend, decides whether/how to render a clicked
+	// slice's list inline versus navigating away.
+	InlineDrilldown bool `json:"inlineDrilldown,omitempty"`
+	// InlineLabels is only meaningful for Shape "pie" — see
+	// dashboard.WidgetTemplate.InlineLabels. Forwarded verbatim: this backend
+	// only passes it through, exactly like InlineDrilldown.
+	InlineLabels bool `json:"inlineLabels,omitempty"`
 }
 
 // filterPresetView is one entry of the shared filter-preset catalogue,
@@ -139,11 +148,24 @@ type dashboardDetailView struct {
 // resolves GET /users/me for its own purposes and can substitute the id
 // itself, the same way it already does for "__current_team__" (see
 // apps/csm-portal/webapp/src/features/csm-dashboard/utils/teamFilterPlaceholder.ts).
-type DashboardHandler struct{}
+type DashboardHandler struct {
+	// access decides, per request, whether a dashboard.Dashboard.Restricted
+	// dashboard is visible to this caller (see PermViewAllDashboards). The
+	// route itself stays PermView for everyone — GetDashboards must still run
+	// for every viewer and simply filter its result, not reject the whole
+	// request — so this check happens here, not via route()/Require.
+	access *AccessGuard
+}
 
-// NewDashboardHandler creates a DashboardHandler.
-func NewDashboardHandler() *DashboardHandler {
-	return &DashboardHandler{}
+// NewDashboardHandler creates a DashboardHandler backed by the given access
+// guard, used to filter/reject dashboard.Dashboard.Restricted dashboards.
+func NewDashboardHandler(access *AccessGuard) *DashboardHandler {
+	return &DashboardHandler{access: access}
+}
+
+// canSeeRestricted reports whether the caller's roles hold PermViewAllDashboards.
+func (h *DashboardHandler) canSeeRestricted(roles []string) bool {
+	return h.access.Permits(PermViewAllDashboards, roles)
 }
 
 // GetDashboards handles GET /dashboards.
@@ -154,9 +176,13 @@ func (h *DashboardHandler) GetDashboards(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	canSeeRestricted := h.canSeeRestricted(user.Roles)
 	dashboards := dashboard.All()
 	views := make([]dashboardListItemView, 0, len(dashboards))
 	for _, d := range dashboards {
+		if d.Restricted && !canSeeRestricted {
+			continue
+		}
 		views = append(views, dashboardListItemView{
 			ID:                 d.ID,
 			DisplayName:        d.DisplayName,
@@ -182,6 +208,10 @@ func (h *DashboardHandler) GetDashboardDetail(w http.ResponseWriter, r *http.Req
 	d, ok := dashboard.ByID(dashboardID)
 	if !ok {
 		writeError(w, http.StatusNotFound, ErrMsgNotFound)
+		return
+	}
+	if d.Restricted && !h.canSeeRestricted(user.Roles) {
+		writeError(w, http.StatusForbidden, ErrMsgForbidden)
 		return
 	}
 
@@ -217,19 +247,21 @@ func widgetViews(templates []dashboard.WidgetTemplate) []dashboardWidgetView {
 			}
 		}
 		views = append(views, dashboardWidgetView{
-			WidgetID:     tpl.ID,
-			DisplayName:  tpl.DisplayName,
-			Description:  tpl.Description,
-			ResourceType: tpl.ResourceType,
-			Shape:        tpl.Shape,
-			GridWidth:    tpl.GridWidth,
-			Query:        tpl.Query,
-			GroupBy:      tpl.GroupBy,
-			ListLimit:    tpl.ListLimit,
-			Slices:       slices,
-			Section:      tpl.Section,
-			Columns:      tpl.Columns,
-			SortBy:       tpl.SortBy,
+			WidgetID:        tpl.ID,
+			DisplayName:     tpl.DisplayName,
+			Description:     tpl.Description,
+			ResourceType:    tpl.ResourceType,
+			Shape:           tpl.Shape,
+			GridWidth:       tpl.GridWidth,
+			Query:           tpl.Query,
+			GroupBy:         tpl.GroupBy,
+			ListLimit:       tpl.ListLimit,
+			Slices:          slices,
+			Section:         tpl.Section,
+			Columns:         tpl.Columns,
+			SortBy:          tpl.SortBy,
+			InlineDrilldown: tpl.InlineDrilldown,
+			InlineLabels:    tpl.InlineLabels,
 		})
 	}
 	return views

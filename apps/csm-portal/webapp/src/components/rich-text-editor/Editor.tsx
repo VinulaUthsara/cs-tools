@@ -38,8 +38,12 @@ import {
   tokenizePlainTextPaste,
   unwrapNestedPreCodeElements,
   collapseEmptyParagraphElements,
+  stripWhitespaceStyleFromHtml,
+  stripLexicalTableStylingFromHtml,
+  htmlToPlainText,
 } from "@components/rich-text-editor/richTextEditor";
 import { ALLOWED_IMAGE_MIME_TYPES } from "@components/rich-text-editor/richTextConstants";
+import PasteFormatDialog from "@components/rich-text-editor/PasteFormatDialog";
 import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext";
 import { type ReactNode, useEffect, useState, useCallback, useMemo, useRef } from "react";
 import Toolbar, {
@@ -50,13 +54,13 @@ import { RichTextPlugin } from "@lexical/react/LexicalRichTextPlugin";
 import { AutoFocusPlugin } from "@lexical/react/LexicalAutoFocusPlugin";
 import { ImageNode } from "@components/rich-text-editor/ImageNode";
 import ImagesPlugin from "@components/rich-text-editor/ImagesPlugin";
-import { MentionNode } from "@components/rich-text-editor/MentionNode";
-import MentionsPlugin from "@components/rich-text-editor/MentionsPlugin";
 import { LinkPlugin } from "@lexical/react/LexicalLinkPlugin";
 import { ClickableLinkPlugin } from "@lexical/react/LexicalClickableLinkPlugin";
 import { LinkNode } from "@lexical/link";
 import { HeadingNode, QuoteNode } from "@lexical/rich-text";
 import { CodeNode } from "@lexical/code";
+import { TableNode, TableRowNode, TableCellNode } from "@lexical/table";
+import { TablePlugin } from "@lexical/react/LexicalTablePlugin";
 import { useLogger } from "@hooks/useLogger";
 import { $generateHtmlFromNodes, $generateNodesFromDOM } from "@lexical/html";
 import { $getRoot } from "lexical";
@@ -126,7 +130,9 @@ const OnChangeHTMLPlugin = ({
       onChange={(editorState) => {
         editorState.read(() => {
           const html = $generateHtmlFromNodes(editor);
-          onChange?.(html);
+          onChange?.(
+            stripLexicalTableStylingFromHtml(stripWhitespaceStyleFromHtml(html)),
+          );
         });
       }}
     />
@@ -314,9 +320,20 @@ const ClipboardImagePlugin = ({
  *   path gets from `tokenizePlainTextPaste`, generalized to any source that
  *   puts `text/html` on the clipboard. See `collapseEmptyParagraphElements`
  *   in richTextEditor.tsx.
+ * - Any HTML paste (clipboard carries a non-empty `text/html`): instead of
+ *   inserting immediately, holds the clipboard payload and shows
+ *   `PasteFormatDialog`, which lets the user choose between "Keep Formatting"
+ *   (the normalized-HTML path above) and "Remove Formatting" (the plain-text
+ *   path below, applied to the pasted content). A plain-text-only paste
+ *   (clipboard has `text/plain` but no `text/html`) is unaffected and always
+ *   goes straight to the plain-text path with no prompt.
  */
-const PasteNormalizationPlugin = (): null => {
+const PasteNormalizationPlugin = (): JSX.Element | null => {
   const [editor] = useLexicalComposerContext();
+  const [pendingPaste, setPendingPaste] = useState<{
+    html: string;
+    text: string;
+  } | null>(null);
 
   useEffect(() => {
     return editor.registerCommand(
@@ -330,21 +347,8 @@ const PasteNormalizationPlugin = (): null => {
         const text = clipboardData.getData("text/plain");
 
         if (html.trim()) {
-          const dom = new DOMParser().parseFromString(html, "text/html");
-          const unwrappedPreCode = unwrapNestedPreCodeElements(dom);
-          const collapsedEmptyParagraphs = collapseEmptyParagraphElements(dom);
-          if (!unwrappedPreCode && !collapsedEmptyParagraphs) return false;
-
           event.preventDefault();
-          editor.update(
-            () => {
-              const selection = $getSelection();
-              if (!$isRangeSelection(selection)) return;
-              const nodes = $generateNodesFromDOM(editor, dom);
-              selection.insertNodes(nodes);
-            },
-            { tag: PASTE_TAG },
-          );
+          setPendingPaste({ html, text });
           return true;
         }
 
@@ -379,7 +383,68 @@ const PasteNormalizationPlugin = (): null => {
     );
   }, [editor]);
 
-  return null;
+  /** "Keep Formatting" -- exactly the normalized-HTML insertion path above. */
+  const applyKeepFormatting = useCallback(() => {
+    if (!pendingPaste) return;
+    const dom = new DOMParser().parseFromString(pendingPaste.html, "text/html");
+    unwrapNestedPreCodeElements(dom);
+    collapseEmptyParagraphElements(dom);
+
+    editor.update(
+      () => {
+        const selection = $getSelection();
+        if (!$isRangeSelection(selection)) return;
+        const nodes = $generateNodesFromDOM(editor, dom);
+        selection.insertNodes(nodes);
+      },
+      { tag: PASTE_TAG },
+    );
+    setPendingPaste(null);
+  }, [editor, pendingPaste]);
+
+  /**
+   * "Remove Formatting" -- discards all structure and treats the paste
+   * exactly like today's plain-text paste path, tokenizing the clipboard's
+   * own `text/plain` payload when present (what a plain-text paste of the
+   * same content would have used) and otherwise falling back to a plain-text
+   * rendering of the HTML.
+   */
+  const applyRemoveFormatting = useCallback(() => {
+    if (!pendingPaste) return;
+    const plainText = pendingPaste.text || htmlToPlainText(pendingPaste.html);
+    const tokens = tokenizePlainTextPaste(plainText);
+
+    editor.update(
+      () => {
+        for (const token of tokens) {
+          const currentSelection = $getSelection();
+          if (!$isRangeSelection(currentSelection)) continue;
+
+          if (token.type === "paragraph") {
+            currentSelection.insertParagraph();
+          } else if (token.type === "tab") {
+            currentSelection.insertNodes([$createTabNode()]);
+          } else {
+            currentSelection.insertText(token.value);
+          }
+        }
+      },
+      { tag: PASTE_TAG },
+    );
+    setPendingPaste(null);
+  }, [editor, pendingPaste]);
+
+  const cancelPendingPaste = useCallback(() => setPendingPaste(null), []);
+
+  if (!pendingPaste) return null;
+
+  return (
+    <PasteFormatDialog
+      onKeepFormatting={applyKeepFormatting}
+      onRemoveFormatting={applyRemoveFormatting}
+      onClose={cancelPendingPaste}
+    />
+  );
 };
 
 /** Static editor config (namespace, nodes, theme). */
@@ -393,7 +458,9 @@ const DEFAULT_EDITOR_CONFIG = {
     LinkNode,
     HeadingNode,
     QuoteNode,
-    MentionNode,
+    TableNode,
+    TableRowNode,
+    TableCellNode,
   ],
   theme: {
     text: {
@@ -604,13 +671,6 @@ const Editor = ({
                 textDecoration: "none",
               },
             },
-            "& .editor-mention": {
-              color: "primary.main",
-              backgroundColor: "action.hover",
-              borderRadius: "4px",
-              padding: "0 2px",
-              fontWeight: oxygenTheme.typography.fontWeightMedium || 500,
-            },
             "& .editor-code": {
               backgroundColor: "background.default",
               color: "text.primary",
@@ -623,6 +683,39 @@ const Editor = ({
               borderRadius: 1,
               border: "1px solid",
               borderColor: "divider",
+            },
+            // Mirrors CsmCaseCommentBubble's read-view table styling so a
+            // table looks the same while composing as it will once posted.
+            "& table": {
+              display: "block",
+              overflowX: "auto",
+              maxWidth: "100%",
+              width: "max-content",
+              minWidth: "100%",
+              borderCollapse: "collapse",
+              margin: "8px 0",
+            },
+            // Lexical's table importer stamps every cell with an inline
+            // `style="width: 75px"` (its own COLUMN_WIDTH default) whenever
+            // the source HTML carries no explicit column widths — without
+            // this override every imported table renders as a cramped,
+            // heavily-wrapped 75px-per-column grid regardless of actual
+            // content, no matter what width this stylesheet rule sets,
+            // since an inline style otherwise always wins. `!important` is
+            // the only way to reclaim natural (`table-layout: auto`)
+            // content-based sizing from it.
+            "& th, & td": {
+              border: 1,
+              borderColor: "divider",
+              px: 1,
+              py: 0.5,
+              textAlign: "left",
+              width: "auto !important",
+              minWidth: 75,
+            },
+            "& th": {
+              bgcolor: "action.hover",
+              fontWeight: 600,
             },
           }}
         >
@@ -658,8 +751,8 @@ const Editor = ({
           {autoFocus && <AutoFocusPlugin />}
           <HistoryPlugin />
           <ListPlugin />
+          <TablePlugin />
           <ImagesPlugin />
-          <MentionsPlugin />
           <ClipboardImagePlugin onPasteError={onPasteError} />
           <PasteNormalizationPlugin />
           <LinkPlugin />

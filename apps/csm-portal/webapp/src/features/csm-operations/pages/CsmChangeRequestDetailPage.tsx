@@ -49,7 +49,9 @@ import { useLocation } from "react-router";
 import { formatBackendTimestampForDisplay } from "@utils/dateTime";
 import { isBlankHtml, sanitizeRichTextHtml } from "@utils/sanitizeHtml";
 import { BackendApiError } from "@api/backend/client";
+import ExportPdfButton from "@components/ExportPdfButton";
 import { useErrorBanner } from "@context/error-banner/ErrorBannerContext";
+import { usePortalAccess } from "@context/current-user/usePortalAccess";
 import { useEngineerDisplayName } from "@hooks/useEngineerDisplayName";
 import { useRecordRecentView } from "@features/csm-recent/hooks/useRecentViews";
 import { useGetChangeRequest } from "@features/csm-operations/api/useGetChangeRequest";
@@ -183,6 +185,11 @@ function PlanSection({ title, html }: { title: string; html?: string | null }): 
           fontSize: "0.875rem",
           lineHeight: 1.5,
           wordBreak: "break-word",
+          // Newly generated comments no longer carry a per-run
+          // `white-space: pre-wrap` inline style (digiops-cs#2933) — declared
+          // once here instead. Older comments carry their own inline style
+          // and are unaffected either way.
+          whiteSpace: "pre-wrap",
           "& p": { my: 0.5 },
           "& p:first-of-type": { mt: 0 },
           "& p:last-child": { mb: 0 },
@@ -226,6 +233,9 @@ export default function CsmChangeRequestDetailPage(): JSX.Element {
   // several times at once (one per open tab, kept alive in the background —
   // see `CaseTabIsolatedRouter`), while there is only ever one real matched
   // route/location for the app as a whole.
+  // UX only — the backend 403s attachment downloads the same regardless of
+  // this flag, so hiding the control here is never the enforcement.
+  const { canDownloadAttachment } = usePortalAccess();
   const routedId = useNormalizedIdParam("id");
   const routedNavigate = useNavTransition();
   const routedLocationState = useLocation().state;
@@ -267,7 +277,11 @@ export default function CsmChangeRequestDetailPage(): JSX.Element {
   );
   const engineerName = useEngineerDisplayName();
 
-  const { data: comments } = useGetCsmChangeRequestComments(id);
+  const {
+    data: comments,
+    isLoading: isCommentsLoading,
+    isError: isCommentsError,
+  } = useGetCsmChangeRequestComments(id);
   const postComment = usePostCsmChangeRequestComment();
   const { data: attachments } = useGetCsmCaseAttachments(id, "change_request");
   const postAttachment = usePostCsmCaseAttachment();
@@ -376,6 +390,17 @@ export default function CsmChangeRequestDetailPage(): JSX.Element {
   }
 
   const cr = data;
+
+  const handleExportChangeRequestPdf = async (): Promise<void> => {
+    try {
+      const { generateChangeRequestReportPdf } = await import(
+        "@features/csm-operations/utils/changeRequestReportPdf"
+      );
+      generateChangeRequestReportPdf(cr, comments ?? []);
+    } catch (err) {
+      showError("Could not export this change request as a PDF. Please try again.", err);
+    }
+  };
   // Only meaningful while the CR is actively moving through approval —
   // closed/canceled/rollback are terminal or off-ramp states where "awaiting
   // approval" no longer describes what's happening.
@@ -489,7 +514,19 @@ export default function CsmChangeRequestDetailPage(): JSX.Element {
 
   return (
     <Box sx={{ display: "flex", flexDirection: "column", gap: 2.5 }}>
-      {BackButton}
+      <Box
+        sx={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+        }}
+      >
+        {BackButton}
+        <ExportPdfButton
+          onExport={handleExportChangeRequestPdf}
+          disabled={isCommentsLoading || isCommentsError}
+        />
+      </Box>
 
       <Box
         sx={{
@@ -811,7 +848,7 @@ export default function CsmChangeRequestDetailPage(): JSX.Element {
               <MetaCell label="Likelihood">
                 <Typography variant="body2">{cr.likelihood?.label || "—"}</Typography>
               </MetaCell>
-              <MetaCell label="Planning visible to customers">
+              <MetaCell label="Implementation Plan visible to customers">
                 <YesNo value={cr.isPlanningVisibleToCustomers} />
               </MetaCell>
               <MetaCell label="Customer updated">
@@ -952,7 +989,7 @@ export default function CsmChangeRequestDetailPage(): JSX.Element {
                 : null
             }
             onUpload={onUploadAttachment}
-            onDownload={onDownloadAttachment}
+            onDownload={canDownloadAttachment ? onDownloadAttachment : undefined}
           />
         </Card>
       )}

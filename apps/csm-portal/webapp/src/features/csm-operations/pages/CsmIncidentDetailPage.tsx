@@ -20,6 +20,7 @@ import {
   ArrowLeft,
   Eye,
   FileText,
+  GitPullRequest,
   Link as LinkIcon,
   MessageSquarePlus,
   Paperclip,
@@ -38,8 +39,10 @@ import {
 import { useLocation } from "react-router";
 import { formatBackendTimestampForDisplay } from "@utils/dateTime";
 import { BackendApiError } from "@api/backend/client";
+import ExportPdfButton from "@components/ExportPdfButton";
 import { useErrorBanner } from "@context/error-banner/ErrorBannerContext";
 import { useCurrentUser } from "@context/current-user/CurrentUserContext";
+import { usePortalAccess } from "@context/current-user/usePortalAccess";
 import { useEngineerDisplayName } from "@hooks/useEngineerDisplayName";
 import { useIdTokenClaims } from "@hooks/useIdTokenClaims";
 import { useRecordRecentView } from "@features/csm-recent/hooks/useRecentViews";
@@ -93,6 +96,7 @@ import { useQueryParamTabs } from "@hooks/useSectionTabs";
 import { useCaseRouteOverride } from "@context/case-tabs/CaseRouteOverrideContext";
 import { useReportCaseTabMeta } from "@features/case-tabs/hooks/useReportCaseTabMeta";
 import { useReportCaseTabDraft } from "@features/case-tabs/hooks/useReportCaseTabDraft";
+import type { CreateChangeRequestFromIncidentNavState } from "@features/csm-operations/utils/changeRequests";
 
 const OPERATIONS_INCIDENTS_PATH = "/operations/incidents";
 
@@ -230,11 +234,26 @@ export default function CsmIncidentDetailPage(): JSX.Element {
   // uses for its own watch list.
   const { user: currentUser } = useCurrentUser();
   const currentUserEmail = useIdTokenClaims()?.email;
+  // UX only — the backend 403s attachment downloads the same regardless of
+  // this flag, so hiding the control here is never the enforcement.
+  const { canDownloadAttachment } = usePortalAccess();
 
-  const { data: comments } = useGetCsmIncidentComments(id);
-  const { data: activityAudit } = useGetCsmIncidentActivities(id);
+  const {
+    data: comments,
+    isLoading: isCommentsLoading,
+    isError: isCommentsError,
+  } = useGetCsmIncidentComments(id);
+  const {
+    data: activityAudit,
+    isLoading: isActivityLoading,
+    isError: isActivityError,
+  } = useGetCsmIncidentActivities(id);
   const postComment = usePostCsmIncidentComment();
-  const { data: attachments } = useGetCsmCaseAttachments(id, "incident");
+  const {
+    data: attachments,
+    isLoading: isAttachmentsLoading,
+    isError: isAttachmentsError,
+  } = useGetCsmCaseAttachments(id, "incident");
   const postAttachment = usePostCsmCaseAttachment();
   const downloadAttachment = useDownloadCsmCaseAttachment();
   const getAttachmentPreviewContent = useGetCsmCaseAttachmentPreviewSource();
@@ -347,8 +366,20 @@ export default function CsmIncidentDetailPage(): JSX.Element {
         setResolutionTarget(target);
         return;
       }
+      // Starting work on an unassigned incident implicitly claims it, same
+      // as the case detail page's "assign to me" flow — otherwise moving an
+      // alert-generated incident to IN_PROGRESS leaves it with no assignee
+      // at all, since nothing else in this flow ever sets one. Combined into
+      // the single state PATCH (unlike cases, the entity service doesn't
+      // treat `state` and `assignedEngineerId` as mutually exclusive here),
+      // and only when nobody's already assigned, so a plain state change on
+      // an already-assigned incident never reassigns it to whoever clicked.
+      const claim =
+        target === "IN_PROGRESS" && !data?.assignedTo && currentUser?.id
+          ? { assignedEngineerId: currentUser.id }
+          : {};
       patchIncident.mutate(
-        { id, patch: { state: target } },
+        { id, patch: { state: target, ...claim } },
         {
           onError: (err) => {
             const msg =
@@ -360,7 +391,7 @@ export default function CsmIncidentDetailPage(): JSX.Element {
         },
       );
     },
-    [id, patchIncident, showError],
+    [id, data?.assignedTo, currentUser?.id, patchIncident, showError],
   );
 
   const onResolutionSubmit = useCallback(
@@ -473,102 +504,171 @@ export default function CsmIncidentDetailPage(): JSX.Element {
   const hasLinkedServiceRequests =
     !!incident.linkedServiceRequests && incident.linkedServiceRequests.length > 0;
 
+  const handleExportIncidentPdf = async (): Promise<void> => {
+    try {
+      const { generateIncidentReportPdf } = await import(
+        "@features/csm-operations/utils/incidentReportPdf"
+      );
+      generateIncidentReportPdf(incident, comments ?? [], activityAudit ?? [], attachmentList);
+    } catch (err) {
+      showError("Could not export this incident as a PDF. Please try again.", err);
+    }
+  };
+
   return (
     <Box sx={{ display: "flex", flexDirection: "column", gap: 2.5 }}>
-      {BackButton}
-
       <Box
         sx={{
           display: "flex",
-          gap: 2,
-          alignItems: "flex-start",
-          flexWrap: { xs: "wrap", md: "nowrap" },
+          alignItems: "center",
           justifyContent: "space-between",
         }}
       >
+        {BackButton}
+        <ExportPdfButton
+          onExport={handleExportIncidentPdf}
+          disabled={
+            isCommentsLoading ||
+            isActivityLoading ||
+            isAttachmentsLoading ||
+            isCommentsError ||
+            isActivityError ||
+            isAttachmentsError
+          }
+        />
+      </Box>
+
+      {/* The action bar to the right is five controls wide and deliberately
+          never shrinks, so anything sharing a flex row with it only gets
+          whatever narrow remainder is left over. Only the short, naturally
+          compact identity block (number + state/priority chips) shares that
+          row; the free-text subject sits on its own full-width row underneath,
+          where it can use the entire header width instead of wrapping over
+          several lines against a mostly-empty header — which is exactly how it
+          rendered, and was reported, while it was still inside that column. */}
+      <Box sx={{ display: "flex", flexDirection: "column", gap: 1 }}>
         <Box
           sx={{
             display: "flex",
-            flexDirection: "column",
-            gap: 1,
-            flex: 1,
-            minWidth: 0,
+            gap: 2,
+            alignItems: "flex-start",
+            flexWrap: { xs: "wrap", md: "nowrap" },
+            justifyContent: "space-between",
           }}
         >
-          <Typography
-            variant="h6"
+          <Box
             sx={{
-              fontFamily: "monospace",
-              fontWeight: 700,
-              letterSpacing: 0.2,
-              lineHeight: 1.2,
+              display: "flex",
+              flexDirection: "column",
+              gap: 1,
+              minWidth: 0,
             }}
           >
-            {incident.number || incident.id}
-          </Typography>
-          <Box sx={{ display: "flex", alignItems: "center", gap: 1, flexWrap: "wrap" }}>
-            {incident.state && (
-              <Chip
-                size="small"
-                color={incidentStateColor(incident.state)}
-                label={incidentStateLabel(incident.state)}
-              />
-            )}
-            {incident.priority && (
-              <Chip
-                size="small"
-                variant="outlined"
-                color={incidentPriorityColor(incident.priority)}
-                label={incidentPriorityLabel(incident.priority)}
-              />
-            )}
-          </Box>
-          <Typography variant="h5">{incident.subject || "Incident"}</Typography>
-        </Box>
-        <Box sx={{ flexShrink: 0, alignSelf: { xs: "stretch", md: "flex-start" } }}>
-          <Box className="csm-print-hide" sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-            <IncidentActionBar
-              incident={incident}
-              isPending={patchIncident.isPending}
-              onAction={onIncidentAction}
-            />
-            <Button
-              variant="outlined"
-              size="small"
-              startIcon={<UserCog size={14} />}
-              onClick={() => {
-                setHandoffResult(null);
-                setHandoffOpen(true);
+            <Typography
+              variant="h6"
+              sx={{
+                fontFamily: "monospace",
+                fontWeight: 700,
+                letterSpacing: 0.2,
+                lineHeight: 1.2,
               }}
             >
-              Escalate to specialist team
-            </Button>
-            <Button
-              variant="outlined"
-              size="small"
-              startIcon={<Megaphone size={14} />}
-              onClick={() =>
-                navigate("/operations/outages/new", {
-                  state: {
-                    from: `/operations/incidents/${incident.id}`,
-                    incidentId: incident.id,
-                    configurationItemId: incident.configurationItem?.id,
-                  },
-                })
-              }
-            >
-              Create outage
-            </Button>
-            <Button
-              variant="outlined"
-              size="small"
-              startIcon={<Pencil size={14} />}
-              onClick={() => setEditOpen(true)}
-            >
-              Edit
-            </Button>
+              {incident.number || incident.id}
+            </Typography>
+            <Box sx={{ display: "flex", alignItems: "center", gap: 1, flexWrap: "wrap" }}>
+              {incident.state && (
+                <Chip
+                  size="small"
+                  color={incidentStateColor(incident.state)}
+                  label={incidentStateLabel(incident.state)}
+                />
+              )}
+              {incident.priority && (
+                <Chip
+                  size="small"
+                  variant="outlined"
+                  color={incidentPriorityColor(incident.priority)}
+                  label={incidentPriorityLabel(incident.priority)}
+                />
+              )}
+            </Box>
+          </Box>
+          <Box sx={{ flexShrink: 0, alignSelf: { xs: "stretch", md: "flex-start" } }}>
+            <Box className="csm-print-hide" sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+              <IncidentActionBar
+                incident={incident}
+                isPending={patchIncident.isPending}
+                onAction={onIncidentAction}
+              />
+              <Button
+                variant="outlined"
+                size="small"
+                startIcon={<UserCog size={14} />}
+                onClick={() => {
+                  setHandoffResult(null);
+                  setHandoffOpen(true);
+                }}
+              >
+                Escalate to specialist team
+              </Button>
+              <Button
+                variant="outlined"
+                size="small"
+                startIcon={<Megaphone size={14} />}
+                onClick={() =>
+                  navigate("/operations/outages/new", {
+                    state: {
+                      from: `/operations/incidents/${incident.id}`,
+                      incidentId: incident.id,
+                      configurationItemId: incident.configurationItem?.id,
+                    },
+                  })
+                }
+              >
+                Create outage
+              </Button>
+              <Button
+                variant="outlined"
+                size="small"
+                startIcon={<GitPullRequest size={14} />}
+                // Pre-selects this incident as the intended parent on the
+                // change-request create form — mirrors the service request's
+                // own "Create change request…" action (`CsmCaseDetailPage`'s
+                // `create_change_request` handler). Unlike that entry point,
+                // submitting with this pre-fill in place is gated on the
+                // create form itself (`isIncidentParentSelected`) until the
+                // backend accepts a change request linked directly to an
+                // incident — see `CreateChangeRequestFromIncidentNavState`'s
+                // doc comment. Offered unconditionally (no state gate) so the
+                // form is reachable regardless of the incident's own state;
+                // the gate lives entirely on the submit side.
+                onClick={() =>
+                  navigate("/operations/change-requests/new", {
+                    // `incident.id` is only nullable in the shared BeIncident
+                    // type for a bare search-result row; this is a loaded
+                    // detail record, always carrying a real id.
+                    state: {
+                      incidentId: incident.id as string,
+                      incidentNumber: incident.number ?? undefined,
+                      incidentSubject: incident.subject ?? undefined,
+                    } satisfies CreateChangeRequestFromIncidentNavState,
+                  })
+                }
+              >
+                Create change request
+              </Button>
+              <Button
+                variant="outlined"
+                size="small"
+                startIcon={<Pencil size={14} />}
+                onClick={() => setEditOpen(true)}
+              >
+                Edit
+              </Button>
+            </Box>
           </Box>
         </Box>
+        <Typography variant="h5">{incident.subject || "Incident"}</Typography>
       </Box>
 
       {incident.specialistHandoff && (
@@ -696,7 +796,9 @@ export default function CsmIncidentDetailPage(): JSX.Element {
             comments={comments ?? []}
             audit={activityAudit ?? []}
             attachments={attachmentList}
-            onDownloadAttachment={onDownloadAttachment}
+            onDownloadAttachment={
+              canDownloadAttachment ? onDownloadAttachment : undefined
+            }
             preview={{
               onGetPreviewContent: getAttachmentPreviewContent,
               previewTarget,
@@ -843,7 +945,9 @@ export default function CsmIncidentDetailPage(): JSX.Element {
                 : null
             }
             onUpload={onUploadAttachment}
-            onDownload={onDownloadAttachment}
+            onDownload={
+              canDownloadAttachment ? onDownloadAttachment : undefined
+            }
             preview={{
               onGetPreviewContent: getAttachmentPreviewContent,
               previewTarget,

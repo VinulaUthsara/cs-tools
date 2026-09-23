@@ -82,6 +82,157 @@ func TestSNProjectService_SearchProjects_MapsAccountRef(t *testing.T) {
 	}
 }
 
+// TestSNProjectService_SearchProjects_MapsOnboardingScopedFields verifies that
+// the onboarding-scoped dashboard fields added to ServiceNow's project search
+// response are mapped into domain.ProjectView: top-level onboardingStatus and
+// onboardingOwner, and the account sub-object's region/subRegion/arrToday.
+func TestSNProjectService_SearchProjects_MapsOnboardingScopedFields(t *testing.T) {
+	const accountSysid = "4a6fc0623b16c31091404c6aa5e45a09"
+	const ownerSysid = "5b6fc0623b16c31091404c6aa5e45a10"
+
+	client := newTestSNClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"projects": []map[string]any{
+				{
+					"id": "11111111111111111111111111111111", "name": "Onboarding project", "key": "OBP",
+					"type":    map[string]any{"name": "Subscription"},
+					"endDate": "", "createdOn": "2026-01-01 00:00:00",
+					"account": map[string]any{
+						"id": accountSysid, "name": "Customer Portal Account",
+						"region": nil, "subRegion": "APAC", "arrToday": "0",
+					},
+					"onboardingStatus": "In-Progress",
+					"onboardingOwner":  map[string]any{"id": ownerSysid, "name": "a a", "email": "ff@ww.com"},
+				},
+			},
+			"totalRecords": 1, "offset": 0, "limit": 10,
+		})
+	}))
+
+	svc := NewServiceNowProjectService(client, nil)
+	resp, err := svc.SearchProjects(contextWithUserIDToken("token"), domain.SearchProjectsRequest{
+		Pagination: domain.Pagination{Limit: 10},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(resp.Projects) != 1 {
+		t.Fatalf("expected 1 project, got %d", len(resp.Projects))
+	}
+
+	p := resp.Projects[0]
+	if p.OnboardingStatus == nil || *p.OnboardingStatus != "In-Progress" {
+		t.Errorf("OnboardingStatus = %v, want \"In-Progress\"", p.OnboardingStatus)
+	}
+	if p.OnboardingOwner == nil {
+		t.Fatalf("OnboardingOwner = nil, want non-nil")
+	}
+	wantOwnerID := sysidToUUID(ownerSysid)
+	if p.OnboardingOwner.ID != wantOwnerID || p.OnboardingOwner.Name != "a a" {
+		t.Errorf("OnboardingOwner = %+v, want id=%s name=\"a a\"", p.OnboardingOwner, wantOwnerID)
+	}
+	if p.OnboardingOwner.Email == nil || *p.OnboardingOwner.Email != "ff@ww.com" {
+		t.Errorf("OnboardingOwner.Email = %v, want ff@ww.com", p.OnboardingOwner.Email)
+	}
+
+	if p.Account == nil {
+		t.Fatalf("Account = nil, want non-nil")
+	}
+	if p.Account.Region != nil {
+		t.Errorf("Account.Region = %v, want nil", *p.Account.Region)
+	}
+	if p.Account.SubRegion == nil || *p.Account.SubRegion != "APAC" {
+		t.Errorf("Account.SubRegion = %v, want APAC", p.Account.SubRegion)
+	}
+	if p.Account.ArrToday == nil || *p.Account.ArrToday != "0" {
+		t.Errorf("Account.ArrToday = %v, want \"0\"", p.Account.ArrToday)
+	}
+}
+
+// TestSNProjectService_SearchProjects_OnboardingScopedFieldsAbsent verifies
+// that a project with none of the onboarding-scoped fields tracked decodes
+// cleanly to nil OnboardingStatus/OnboardingOwner and nil account
+// region/subRegion/arrToday, rather than empty-string/zero-value
+// placeholders.
+func TestSNProjectService_SearchProjects_OnboardingScopedFieldsAbsent(t *testing.T) {
+	client := newTestSNClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"projects": []map[string]any{
+				{
+					"id": "22222222222222222222222222222222", "name": "Plain project", "key": "PLN",
+					"type":    map[string]any{"name": "Subscription"},
+					"endDate": "", "createdOn": "2026-01-01 00:00:00",
+					"account": map[string]any{"id": "", "name": ""},
+				},
+			},
+			"totalRecords": 1, "offset": 0, "limit": 10,
+		})
+	}))
+
+	svc := NewServiceNowProjectService(client, nil)
+	resp, err := svc.SearchProjects(contextWithUserIDToken("token"), domain.SearchProjectsRequest{
+		Pagination: domain.Pagination{Limit: 10},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	p := resp.Projects[0]
+	if p.OnboardingStatus != nil {
+		t.Errorf("OnboardingStatus = %v, want nil", *p.OnboardingStatus)
+	}
+	if p.OnboardingOwner != nil {
+		t.Errorf("OnboardingOwner = %+v, want nil", p.OnboardingOwner)
+	}
+	if p.Account != nil {
+		t.Errorf("Account = %+v, want nil for a project with no linked account", p.Account)
+	}
+}
+
+// TestSNProjectService_SearchProjects_WiresOnboardingScopedFilters verifies
+// that OnboardingStatus/ArrTodayGte/SubRegion on the request are translated
+// into the corresponding keys on the Choreo request body's filters object,
+// matching digiops-cs's field names exactly.
+func TestSNProjectService_SearchProjects_WiresOnboardingScopedFilters(t *testing.T) {
+	var gotBody map[string]any
+	client := newTestSNClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"projects": []map[string]any{}, "totalRecords": 0, "offset": 0, "limit": 10,
+		})
+	}))
+
+	svc := NewServiceNowProjectService(client, nil)
+	_, err := svc.SearchProjects(contextWithUserIDToken("token"), domain.SearchProjectsRequest{
+		Pagination:       domain.Pagination{Limit: 10},
+		OnboardingStatus: []string{"In-Progress", "Not-Started"},
+		ArrTodayGte:      "1000",
+		SubRegion:        "APAC",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	filters, ok := gotBody["filters"].(map[string]any)
+	if !ok {
+		t.Fatalf("request body missing filters object: %+v", gotBody)
+	}
+	gotStatuses, ok := filters["onboardingStatus"].([]any)
+	if !ok || len(gotStatuses) != 2 || gotStatuses[0] != "In-Progress" || gotStatuses[1] != "Not-Started" {
+		t.Errorf("filters.onboardingStatus = %v, want [In-Progress Not-Started]", filters["onboardingStatus"])
+	}
+	if filters["arrTodayGte"] != "1000" {
+		t.Errorf("filters.arrTodayGte = %v, want 1000", filters["arrTodayGte"])
+	}
+	if filters["subRegion"] != "APAC" {
+		t.Errorf("filters.subRegion = %v, want APAC", filters["subRegion"])
+	}
+}
+
 // TestSNProjectService_SearchProjects_MapsStartDate verifies that the date-only
 // startDate from ServiceNow's project search response is parsed into
 // domain.ProjectView.StartDate, and that a null or absent startDate maps to a
@@ -149,6 +300,48 @@ func TestSNProjectService_SearchProjects_MapsStartDate(t *testing.T) {
 	}
 	if got := resp.Projects[2].StartDate; got != nil {
 		t.Fatalf("expected nil StartDate for absent startDate, got %v", *got)
+	}
+}
+
+// TestSNProjectService_SearchProjects_UnrecognizedSubscriptionTypeDoesNotFail
+// verifies that a project whose ServiceNow "type" name doesn't match any
+// known SubscriptionType value no longer fails the whole search. Reported
+// live: fetchEligibleProjectIDs (SearchProjectsByProductVersion's mandatory
+// audience-exclusion check) pages through every project on the platform with
+// no scoping filter, and a single project anywhere with an unrecognized type
+// took down every caller's product-version audience resolution with an
+// opaque 500 ("Couldn't resolve the audience. Try again."). The project must
+// still come back, with a best-effort derived (non-canonical)
+// SubscriptionType, rather than aborting the request -- see
+// snTypeNameToSubscriptionType's own doc comment.
+func TestSNProjectService_SearchProjects_UnrecognizedSubscriptionTypeDoesNotFail(t *testing.T) {
+	client := newTestSNClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"projects": []map[string]any{
+				{
+					"id": "11111111111111111111111111111111", "name": "Legacy Type Project", "key": "LT",
+					"type":    map[string]any{"name": "Some Legacy Type"},
+					"endDate": "", "createdOn": "2026-01-01 00:00:00",
+					"account": map[string]any{"id": "", "name": ""},
+				},
+			},
+			"totalRecords": 1, "offset": 0, "limit": 10,
+		})
+	}))
+
+	svc := NewServiceNowProjectService(client, nil)
+	resp, err := svc.SearchProjects(contextWithUserIDToken("token"), domain.SearchProjectsRequest{
+		Pagination: domain.Pagination{Limit: 10},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(resp.Projects) != 1 {
+		t.Fatalf("expected 1 project, got %d", len(resp.Projects))
+	}
+	if got := resp.Projects[0].SubscriptionType; got != domain.SubscriptionType("some_legacy_type") {
+		t.Errorf("SubscriptionType = %q, want best-effort derived \"some_legacy_type\"", got)
 	}
 }
 
@@ -336,6 +529,34 @@ func TestSNProjectService_GetProjectByID_MapsHasSr(t *testing.T) {
 	}
 }
 
+// TestSNProjectService_GetProjectByID_UnrecognizedSubscriptionTypeDoesNotFail
+// is GetProjectByID's counterpart to
+// TestSNProjectService_SearchProjects_UnrecognizedSubscriptionTypeDoesNotFail
+// -- the other of snTypeNameToSubscriptionType's two callers. An unrecognized
+// type name must not make a single project's own detail page unviewable.
+func TestSNProjectService_GetProjectByID_UnrecognizedSubscriptionTypeDoesNotFail(t *testing.T) {
+	projectSysid := sysid32('d')
+
+	client := newTestSNClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id": projectSysid, "name": "Legacy Type Project", "key": "LT", "sfId": "sf-3",
+			"createdOn": "2026-01-01 00:00:00", "startDate": "2026-01-01", "endDate": "2026-12-31",
+			"type":    map[string]any{"name": "Some Legacy Type"},
+			"account": map[string]any{"id": "", "name": ""},
+		})
+	}))
+
+	svc := NewServiceNowProjectService(client, nil)
+	got, err := svc.GetProjectByID(contextWithUserIDToken("token"), sysidToUUID(projectSysid))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.SubscriptionType != domain.SubscriptionType("some_legacy_type") {
+		t.Errorf("SubscriptionType = %q, want best-effort derived \"some_legacy_type\"", got.SubscriptionType)
+	}
+}
+
 // TestSNProjectService_GetProjectByID_MapsOnboardingFields verifies that the
 // detail-only onboardingStatus and onboardingOwner fields are parsed from the
 // project-detail response and mapped into domain.ProjectDetailsView, with the
@@ -511,5 +732,37 @@ func TestSNProjectService_GetProjectByID_EmptyOptionalDates(t *testing.T) {
 	}
 	if got.Account.DeactivationDate != nil {
 		t.Errorf("GetProjectByID Account.DeactivationDate = %v, want nil for empty upstream deactivationDate", *got.Account.DeactivationDate)
+	}
+}
+
+// TestIsProjectContractEnded mirrors the exact boundary semantics of
+// apps/customer-portal/webapp/src/utils/permission.ts's own
+// isProjectContractEnded (end-of-day UTC comparison, strictly after) — the
+// two must agree, or a project the customer portal blocks as contract-ended
+// could still be treated as eligible for an EOL announcement audience by
+// fetchEligibleProjectIDs, or vice versa.
+func TestIsProjectContractEnded(t *testing.T) {
+	day := time.Date(2026, 6, 15, 0, 0, 0, 0, time.UTC)
+
+	tests := []struct {
+		name    string
+		endDate *time.Time
+		now     time.Time
+		want    bool
+	}{
+		{"nil end date is never ended", nil, time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC), false},
+		{"now before end date's day", &day, time.Date(2026, 6, 14, 23, 0, 0, 0, time.UTC), false},
+		{"now during end date's own day", &day, time.Date(2026, 6, 15, 12, 0, 0, 0, time.UTC), false},
+		{"now at exact end-of-day instant is not yet ended", &day, time.Date(2026, 6, 15, 23, 59, 59, 999000000, time.UTC), false},
+		{"now one millisecond after end-of-day is ended", &day, time.Date(2026, 6, 16, 0, 0, 0, 0, time.UTC), true},
+		{"now well after end date", &day, time.Date(2026, 9, 22, 0, 0, 0, 0, time.UTC), true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isProjectContractEnded(tt.endDate, tt.now); got != tt.want {
+				t.Errorf("isProjectContractEnded(%v, %v) = %v, want %v", tt.endDate, tt.now, got, tt.want)
+			}
+		})
 	}
 }
