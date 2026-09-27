@@ -389,6 +389,48 @@ func (c *CustomerEntityClient) PatchDeployedProduct(ctx context.Context, deploye
 	return c.do(ctx, http.MethodPatch, fmt.Sprintf("/deployed-products/%s", url.PathEscape(deployedProductID)), body)
 }
 
+// SearchDeployedProductMetrics calls POST /deployed-products/{id}/metrics/search on the entity service.
+// Response is returned as raw JSON; field filtering to the portal shape is deferred.
+func (c *CustomerEntityClient) SearchDeployedProductMetrics(ctx context.Context, deployedProductID string, body []byte) ([]byte, error) {
+	return c.do(ctx, http.MethodPost, fmt.Sprintf("/deployed-products/%s/metrics/search", url.PathEscape(deployedProductID)), body)
+}
+
+// SearchDeployedProductUsageCounts calls POST /deployed-products/{id}/metrics/usage-counts/search on the entity service.
+// Response is returned as raw JSON; field filtering to the portal shape is deferred.
+func (c *CustomerEntityClient) SearchDeployedProductUsageCounts(ctx context.Context, deployedProductID string, body []byte) ([]byte, error) {
+	return c.do(ctx, http.MethodPost, fmt.Sprintf("/deployed-products/%s/metrics/usage-counts/search", url.PathEscape(deployedProductID)), body)
+}
+
+// SearchInstances calls POST /instances/search on the entity service.
+// Response is returned as raw JSON; field filtering to the portal shape is deferred.
+func (c *CustomerEntityClient) SearchInstances(ctx context.Context, body []byte) ([]byte, error) {
+	return c.do(ctx, http.MethodPost, "/instances/search", body)
+}
+
+// SearchInstanceMetrics calls POST /instances/metrics/search on the entity service.
+// Response is returned as raw JSON; field filtering to the portal shape is deferred.
+func (c *CustomerEntityClient) SearchInstanceMetrics(ctx context.Context, body []byte) ([]byte, error) {
+	return c.do(ctx, http.MethodPost, "/instances/metrics/search", body)
+}
+
+// SearchInstanceMetricsStats calls POST /instances/metrics/stats/search on the entity service.
+// Response is returned as raw JSON; field filtering to the portal shape is deferred.
+func (c *CustomerEntityClient) SearchInstanceMetricsStats(ctx context.Context, body []byte) ([]byte, error) {
+	return c.do(ctx, http.MethodPost, "/instances/metrics/stats/search", body)
+}
+
+// SearchInstanceUsage calls POST /instances/usages/search on the entity service.
+// Response is returned as raw JSON; field filtering to the portal shape is deferred.
+func (c *CustomerEntityClient) SearchInstanceUsage(ctx context.Context, body []byte) ([]byte, error) {
+	return c.do(ctx, http.MethodPost, "/instances/usages/search", body)
+}
+
+// SearchInstanceUsageStats calls POST /instances/usages/stats/search on the entity service.
+// Response is returned as raw JSON; field filtering to the portal shape is deferred.
+func (c *CustomerEntityClient) SearchInstanceUsageStats(ctx context.Context, body []byte) ([]byte, error) {
+	return c.do(ctx, http.MethodPost, "/instances/usages/stats/search", body)
+}
+
 // SearchChangeRequests calls POST /change-requests/search on the entity service.
 // Response is returned as raw JSON; typed response structs are deferred.
 func (c *CustomerEntityClient) SearchChangeRequests(ctx context.Context, body []byte) ([]byte, error) {

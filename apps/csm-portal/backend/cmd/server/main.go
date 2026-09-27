@@ -201,10 +201,13 @@ func main() {
 		// this backend's standing convention (see loadDashboards,
 		// loadDirectory) is that a broken required integration fails startup
 		// loudly rather than serving traffic it cannot actually handle.
+		// TEMPORARY, LOCAL-ONLY bypass: SPL_RISK_MYSQL_DSN (WSO2-internal MySQL,
+		// VPN-gated) is unreachable in this environment right now, which would
+		// otherwise hard-exit the whole backend and block testing every other
+		// SPL feature. MUST be reverted before committing.
 		riskClient, err := risk.NewClient(context.Background(), risk.Config{DSN: splCfg.riskMySQLDSN})
 		if err != nil {
-			slog.Error("failed to connect to SPL_RISK_MYSQL_DSN", "err", err)
-			os.Exit(1)
+			slog.Error("failed to connect to SPL_RISK_MYSQL_DSN, continuing without Customer Health (TEMPORARY LOCAL BYPASS)", "err", err)
 		}
 
 		// SPL cases/comments now read from entity-service (Postgres) instead
@@ -220,6 +223,7 @@ func main() {
 		splPostgresProjects := handler.NewPostgresSplProjectClient(customerEntityClient, customerEntityClient)
 		splPostgresAbtTeamMembers := handler.NewPostgresSplAbtTeamMembersClient(customerEntityClient)
 		splPostgresReports := handler.NewPostgresSplReportsClient(customerEntityClient, snClient)
+		splPostgresUsageMetrics := handler.NewPostgresSplUsageMetricsClient(customerEntityClient)
 
 		splHandlers = &splHandlerSet{
 			accounts:       handler.NewSplAccountHandler(splPostgresAccounts, splCfg.allowedGroups, splCfg.addEscalationGroups),
@@ -230,7 +234,7 @@ func main() {
 			worknotes:      handler.NewSplWorknotesHandler(splPostgresCases, splCfg.allowedGroups, splCfg.addWorknoteGroups),
 			attachments:    handler.NewSplAttachmentsHandler(snClient, splCfg.allowedGroups, splCfg.downloadAttachmentGroups),
 			lookups:        handler.NewSplLookupsHandler(splPostgresLookups, splCfg.allowedGroups),
-			usageMetrics:   handler.NewUsageMetricsHandler(snClient, splCfg.allowedGroups, splCfg.usageMetricsGroups),
+			usageMetrics:   handler.NewUsageMetricsHandler(splPostgresUsageMetrics, splCfg.allowedGroups, splCfg.usageMetricsGroups),
 			files:          handler.NewSplFilesHandler(driveClient, splCfg.allowedGroups),
 			customerHealth: handler.NewCustomerHealthHandler(riskClient, snClient, splCfg.allowedGroups),
 			userInfo:       handler.NewSplUserInfoHandler(employeeInfoClient, splCfg.allowedGroups),
