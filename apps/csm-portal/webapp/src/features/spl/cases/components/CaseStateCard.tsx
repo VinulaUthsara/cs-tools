@@ -31,7 +31,10 @@ export default function CaseStateCard({
   setCaseState,
 }: {
   state: string;
-  color: string;
+  /** A {light, dark} pair, not one static color — see SplCasesPage's COLORS
+   *  for why a single hex can't have good contrast against the card's own
+   *  background in both modes. */
+  color: { light: string; dark: string };
   data: CaseDetailsWithCount | undefined;
   loading: boolean;
   error: Error | null | undefined;
@@ -43,6 +46,7 @@ export default function CaseStateCard({
   // that actually tracks the live scheme.
   const { mode: colorMode, systemMode } = useColorScheme();
   const isDark = (colorMode === "system" ? systemMode : colorMode) === "dark";
+  const countColor = isDark ? color.dark : color.light;
 
   return (
     <Card
@@ -50,6 +54,12 @@ export default function CaseStateCard({
         width: 290,
         height: 175,
         cursor: "pointer",
+        // One uniform, slightly darker neutral for all six cards (regardless
+        // of state) instead of the default white/paper background — reads as
+        // a deliberate set of tiles against the "Overall Case Summary" panel
+        // rather than blending into it. Per-state identity stays in the
+        // count's own text color (the `color` prop below), not the card.
+        backgroundColor: isDark ? theme.palette.grey[800] : theme.palette.grey[200],
         // Same warm-orange hover identity in both modes — a solid light
         // peach reads fine on a light card but washes out a dark one, so an
         // alpha overlay (which composites against whatever's underneath)
@@ -70,7 +80,7 @@ export default function CaseStateCard({
           ) : (
             data && (
               <>
-                <Typography align="center" gutterBottom variant="h3" component="div" color={color}>
+                <Typography align="center" gutterBottom variant="h3" component="div" color={countColor}>
                   {data.count}
                 </Typography>
                 <Typography align="center" gutterBottom variant="h5" component="div">

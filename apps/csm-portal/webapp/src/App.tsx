@@ -35,6 +35,7 @@ import {
   firstEnabledDestination,
 } from "@config/featureFlags";
 import { usePortalAccess } from "@context/current-user/usePortalAccess";
+import { usePortalView } from "@context/current-user/usePortalView";
 import {
   POST_LOGIN_REDIRECT_KEY,
   PostLoginRedirectConsumer,
@@ -151,7 +152,12 @@ function RootLanding(): JSX.Element | null {
   const hasDeepLinkSearch = ["goto", "q"].some((key) =>
     Boolean(searchParams.get(key)?.trim()),
   );
-  return pending || hasDeepLinkSearch ? null : <Navigate to="/dashboard" replace />;
+  // The Sales/SA view has no dashboard (SPL never had one) — its landing
+  // page is Cases, same as the standalone app's own index redirect. See
+  // usePortalView.ts.
+  const view = usePortalView();
+  const landing = view === "sales-sa" ? "/spl/cases" : "/dashboard";
+  return pending || hasDeepLinkSearch ? null : <Navigate to={landing} replace />;
 }
 
 /**

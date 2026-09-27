@@ -29,6 +29,7 @@
 // it makes, same as any other tampered/stale-claim scenario in this app.
 
 import { useAsgardeoGroups, hasAnyGroup } from "@hooks/useAsgardeoGroups";
+import { devBypassAccessCheck } from "@config/devFlags";
 
 export interface SplAccess {
   /** False until group membership has been resolved — hold gated UI until it clears. */
@@ -42,6 +43,10 @@ function splAudienceGroups(): string[] {
 
 export function useSplAccess(): SplAccess {
   const identity = useAsgardeoGroups();
+  // TEMPORARY / LOCAL DEV ONLY — see authConfig.ts's devBypassAccessCheck.
+  // Short-circuits SPL's own audience gate so the section shows up even
+  // when the real id_token carries no (or the wrong) Asgardeo groups.
+  if (devBypassAccessCheck) return { ready: true, hasAccess: true };
   if (!identity.ready) return { ready: false, hasAccess: false };
   return { ready: true, hasAccess: hasAnyGroup(identity.groups, splAudienceGroups()) };
 }

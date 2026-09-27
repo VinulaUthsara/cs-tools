@@ -359,21 +359,33 @@ export const CSM_NAV_ITEMS: CsmNavSection[] = [
     ],
   },
   // Support Portal Lite — Sales/Solutions-Architecture staff only, ported
-  // from the former standalone apps/support-portal-lite/webapp. Visibility
-  // is gated by useSplAccess (client-side Asgardeo groups), NOT this app's
-  // usual per-page feature-flag/roles mechanism — see CsmSideBar.tsx and
-  // App.tsx's SplRouteGuard for where that check actually happens; this
-  // section still exists in the tree unconditionally so
-  // CSM_PORTAL_FEATURE_OVERRIDES' WIP/hidden mechanism works on it too, on
-  // top of the audience gate.
+  // from the former standalone apps/support-portal-lite/webapp. Rendered as
+  // its OWN exclusive left nav (this node's children, flattened, replacing
+  // the CS nav entirely) rather than merged into the CS section list above —
+  // see usePortalView.ts and CsmSideBar.tsx. Route access is still gated by
+  // useSplAccess (client-side Asgardeo groups), NOT this app's usual
+  // per-page feature-flag/roles mechanism — see App.tsx's SplRouteGuard for
+  // where that check actually happens; this section still exists in the
+  // tree unconditionally so CSM_PORTAL_FEATURE_OVERRIDES' WIP/hidden
+  // mechanism works on it too, on top of the audience gate.
   {
     id: "spl",
     label: "Support Portal Lite",
     href: "/spl/cases",
     icon: Layers,
     children: [
-      { id: "spl.cases", label: "Cases", href: "/spl/cases" },
-      { id: "spl.accounts", label: "Accounts", href: "/spl/accounts", icon: Building2 },
+      { id: "spl.cases", label: "Cases", href: "/spl/cases", icon: Layers },
+      {
+        id: "spl.accounts",
+        label: "Accounts",
+        href: "/spl/accounts",
+        icon: Building2,
+        // /spl/my-accounts is the same feature (an in-page My/All toggle on
+        // SplAccountsPage, no nav entry of its own — see App.tsx) so it must
+        // roll up to this node too, or landing there would fall through to
+        // no active nav highlight at all.
+        routes: ["/spl/my-accounts"],
+      },
       { id: "spl.projects", label: "Projects", href: "/spl/projects", icon: FolderKanban },
       {
         id: "spl.team-schedule",

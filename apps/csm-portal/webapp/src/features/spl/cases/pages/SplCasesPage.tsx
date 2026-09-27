@@ -36,7 +36,22 @@ import CaseStateView from "../components/CaseStateView";
 import type { CaseDetailsWithCount } from "../api/splCaseTypes";
 
 const STATES = ["Open", "Work In Progress", "Awaiting Info", "Solution Proposed", "Waiting on WSO2", "Reopened"];
-const COLORS = ["#0052cc", "#008000", "pink", "brown", "#F25C36", "#8993a4"];
+// Per state, a {light, dark} pair rather than one static hex — the count's
+// own uniform grey card background (see CaseStateCard) sits at a different
+// brightness in each mode, and a single color can't have good contrast
+// against both: a pale pink or a slate grey close to the card's own tone
+// (the previous flat COLORS values) read as nearly invisible against a
+// light-grey card, a dark-grey one, or both. Each pair here is a light-mode
+// "800"-ish shade and a dark-mode "200"/"400"-ish shade of the same hue,
+// the standard MUI convention for text-on-tinted-surface contrast.
+const COLORS: { light: string; dark: string }[] = [
+  { light: "#0052CC", dark: "#4C9AFF" }, // Open — blue
+  { light: "#2E7D32", dark: "#66BB6A" }, // Work In Progress — green
+  { light: "#AD1457", dark: "#F48FB1" }, // Awaiting Info — pink/magenta
+  { light: "#5D4037", dark: "#BCAAA4" }, // Solution Proposed — brown
+  { light: "#D84315", dark: "#FF8A65" }, // Waiting on WSO2 — deep orange
+  { light: "#37474F", dark: "#B0BEC5" }, // Reopened — blue-grey
+];
 
 function useCaseStateQuery(state: string) {
   const [page, setPage] = useState(0);
