@@ -1749,6 +1749,25 @@ func (r *caseRepo) SearchCases(ctx context.Context, req domain.SearchCasesReques
 		argIdx++
 	}
 
+	// number/internalId: exact-match filters parsed by case_filters.go (see
+	// ParsedCaseFilters.Number/InternalID's own doc comments) but never
+	// actually applied here until now -- every by-number/by-internal-id
+	// lookup (SPL's postgresSplCaseClient.resolveCaseByNumber chief among
+	// them, since entity-service's GET /cases/{id} only accepts the internal
+	// UUID) silently ignored this filter and fell through to whatever the
+	// sort/limit happened to pick, ordinarily the single most-recently-
+	// created case overall regardless of the requested number.
+	if req.Parsed.Number != nil {
+		where += fmt.Sprintf(" AND wi.number = $%d", argIdx)
+		filterArgs = append(filterArgs, *req.Parsed.Number)
+		argIdx++
+	}
+	if req.Parsed.InternalID != nil {
+		where += fmt.Sprintf(" AND wi.wso2_id = $%d", argIdx)
+		filterArgs = append(filterArgs, *req.Parsed.InternalID)
+		argIdx++
+	}
+
 	if req.Parsed.ClosedStartDate != nil {
 		where += fmt.Sprintf(" AND c.closed_on >= $%d", argIdx)
 		filterArgs = append(filterArgs, req.Parsed.ClosedStartDate)
