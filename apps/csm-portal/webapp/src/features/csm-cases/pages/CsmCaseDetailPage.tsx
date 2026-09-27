@@ -48,6 +48,7 @@ import {
 } from "@wso2/oxygen-ui-icons-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type JSX } from "react";
 import { useLocation } from "react-router";
+import { ApiQueryKeys } from "@constants/apiConstants";
 import { useGetCsmCaseDetail } from "@features/csm-cases/api/useGetCsmCaseDetail";
 import { useCurrentUser } from "@context/current-user/CurrentUserContext";
 import { usePortalAccess } from "@context/current-user/usePortalAccess";
@@ -71,7 +72,9 @@ import { beStateFromUi, priorityFromSeverity } from "@api/backend/mappers";
 import type { Severity } from "@features/csm-dashboard/types/abtDashboard";
 import { BackendApiError } from "@api/backend/client";
 import {
+  useDeleteComment,
   useGetCsmCaseComments,
+  usePatchComment,
   usePostCsmCaseComment,
 } from "@features/csm-cases/api/useCsmCaseComments";
 import { useGetCsmConversationMessages } from "@features/csm-cases/api/useCsmConversationMessages";
@@ -517,16 +520,16 @@ export default function CsmCaseDetailPage(): JSX.Element {
   // adds a comment or the case's status changes, so this tab doesn't rely
   // solely on their own staleTime/a manual refresh to catch up.
   useCaseActivityStream(caseId);
-  // Case Feedback (CSAT survey) submissions for this case, if any — almost
-  // always empty for an open case (the survey goes out after closure), which
-  // is expected and renders no feedback lane rather than an error.
+  // Case Feedback (CSAT survey) submissions for this case, if any — the
+  // survey only exists once a case is closed, so the query itself is
+  // disabled until then rather than firing early for an open case.
   const {
     data: caseFeedback,
     isLoading: isFeedbackLoading,
     isError: isFeedbackError,
     refetch: refetchFeedback,
     isFetching: isFetchingFeedback,
-  } = useGetCsmCaseFeedback(caseId);
+  } = useGetCsmCaseFeedback(caseId, data?.state === "closed");
   // The chat transcript the case was spawned from, when linked. Loaded lazily
   // off the case's conversation id and merged into the comment stream below so
   // it renders as the earliest activity entries — mirrors the customer portal.
@@ -540,6 +543,25 @@ export default function CsmCaseDetailPage(): JSX.Element {
     isFetching: isFetchingChat,
   } = useGetCsmConversationMessages(data?.conversationId);
   const postComment = usePostCsmCaseComment();
+  const patchComment = usePatchComment();
+  const deleteComment = useDeleteComment();
+  const onEditComment = useCallback(
+    (commentId: string, content: string) =>
+      patchComment.mutateAsync({
+        commentId,
+        content,
+        invalidateQueryKey: [ApiQueryKeys.CSM_CASE_COMMENTS, caseId],
+      }),
+    [patchComment, caseId],
+  );
+  const onDeleteComment = useCallback(
+    (commentId: string) =>
+      deleteComment.mutateAsync({
+        commentId,
+        invalidateQueryKey: [ApiQueryKeys.CSM_CASE_COMMENTS, caseId],
+      }),
+    [deleteComment, caseId],
+  );
   const {
     data: attachments,
     isLoading: isAttachmentsLoading,
@@ -1530,19 +1552,33 @@ export default function CsmCaseDetailPage(): JSX.Element {
     proceedLifecycleTransition(action, targetState);
   }, [noPublicCommentConfirm, proceedLifecycleTransition]);
 
-  // Assign the case to the chosen engineer via PATCH { assigneeEmail }. The
-  // detail query is invalidated by the hook, so the assignee display refreshes
-  // on success. (ServiceNow-source only; the BE rejects it for PG cases.)
+  // Assign the case to the chosen engineer via PATCH { assigneeEmail }, or
+  // clear the assignee via PATCH { assigneeEmail: null }. The detail query is
+  // invalidated by the hook, so the assignee display refreshes on success.
+  // Supported for both data sources on this branch (the Postgres path has
+  // its own native assignee handling, see entity-service's updateCaseAssignee).
   const onAssign = useCallback(
-    (email: string) => {
+    (email: string | null) => {
       patchCase.mutate(
         { assigneeEmail: email },
         {
           onSuccess: () => {
             setAssignOpen(false);
-            showSuccess("Case reassigned.");
+            showSuccess(email === null ? "Case unassigned." : "Case reassigned.");
           },
-          onError: (err) => showError("Could not reassign the case.", err),
+          onError: (err) => {
+            // SN can reject a clear/reassign for state reasons (e.g. "cannot
+            // be changed for Work In Progress - Ongoing") — surface that
+            // 4xx message verbatim rather than the generic fallback, same
+            // treatment as every other 4xx on this page.
+            const msg =
+              err instanceof BackendApiError && err.status < 500 && err.message
+                ? err.message
+                : email === null
+                  ? "Could not unassign the case."
+                  : "Could not reassign the case.";
+            showError(msg, err);
+          },
         },
       );
     },
@@ -2703,6 +2739,8 @@ export default function CsmCaseDetailPage(): JSX.Element {
                     previewTarget,
                     onPreviewTargetChange: setPreviewTarget,
                   }}
+                  onEditComment={onEditComment}
+                  onDeleteComment={onDeleteComment}
                 />
               </>
             )}

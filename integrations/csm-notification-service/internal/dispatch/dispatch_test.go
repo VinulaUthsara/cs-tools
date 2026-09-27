@@ -32,10 +32,12 @@ import (
 )
 
 type sentEmail struct {
-	to       []string
-	bcc      []string
-	subject  string
-	htmlBody string
+	from        string
+	to          []string
+	bcc         []string
+	subject     string
+	htmlBody    string
+	attachments []notifications.EmailAttachment
 }
 
 type mockEmailSender struct {
@@ -49,14 +51,31 @@ type mockEmailSender struct {
 	// other test here, which drives Handle sequentially.
 	mu    sync.Mutex
 	calls []sentEmail
+	// block, when non-nil, holds every send open until it is closed, so a
+	// test can have a second Handle call arrive mid-send.
+	block chan struct{}
+	// onSend, when set, runs as the send completes -- a seam for a test
+	// that needs something to happen between the e-mail going out and the
+	// step being recorded.
+	onSend func()
 }
 
 func (m *mockEmailSender) FromAddress() string { return "noreply@wso2.com" }
 
 func (m *mockEmailSender) SendEmail(ctx context.Context, to, cc, bcc, replyTo []string, subject, htmlBody string, attachments []notifications.EmailAttachment) error {
+	return m.SendEmailFrom(ctx, "", to, cc, bcc, replyTo, subject, htmlBody, attachments)
+}
+
+func (m *mockEmailSender) SendEmailFrom(ctx context.Context, from string, to, cc, bcc, replyTo []string, subject, htmlBody string, attachments []notifications.EmailAttachment) error {
+	if m.block != nil {
+		<-m.block
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.calls = append(m.calls, sentEmail{to: to, bcc: bcc, subject: subject, htmlBody: htmlBody})
+	m.calls = append(m.calls, sentEmail{from: from, to: to, bcc: bcc, subject: subject, htmlBody: htmlBody, attachments: attachments})
+	if m.onSend != nil {
+		m.onSend()
+	}
 	if m.errFor != nil {
 		return m.errFor(to)
 	}
@@ -506,6 +525,44 @@ func TestDispatcher_Handle_CommentAdded(t *testing.T) {
 	}
 }
 
+// TestDispatcher_Handle_CommentAdded_InlineImage verifies a comment
+// containing an inline (data: URI) image ends up sent as a real inline
+// EmailAttachment with a matching Content-ID, referenced from the email
+// body as cid:<contentId> — never as the original data: URI, which Gmail
+// and most major webmail clients strip from received HTML on render.
+func TestDispatcher_Handle_CommentAdded_InlineImage(t *testing.T) {
+	mock := &mockEmailSender{}
+	d := newTestDispatcher(mock, &mockGoogleChatSender{}, &mockCallSender{})
+
+	const dataURI = "data:image/png;base64,aGVsbG8="
+	payload := `{"type":"case.comment_added","entityId":"CASE-1","payload":{"name":"Commenter","projectId":"PROJ-1","caseId":"CASE-1","caseTitle":"Something broke","caseComment":"<p>see attached<img src=\"` + dataURI + `\"></p>","commentId":"C-1","recipients":["test-recipient@example.com"]}}`
+	record := eventbus.Record{Value: []byte(payload)}
+
+	if err := d.Handle(context.Background(), record); err != nil {
+		t.Fatalf("Handle() error = %v", err)
+	}
+	if len(mock.calls) != 1 {
+		t.Fatalf("expected 1 email sent, got %d", len(mock.calls))
+	}
+	call := mock.calls[0]
+	if strings.Contains(call.htmlBody, "data:image") {
+		t.Error("htmlBody must never contain the original data: URI")
+	}
+	if len(call.attachments) != 1 {
+		t.Fatalf("expected 1 attachment, got %d", len(call.attachments))
+	}
+	att := call.attachments[0]
+	if !att.Inline || att.ContentID == "" {
+		t.Errorf("attachment not marked inline with a Content-ID: %+v", att)
+	}
+	if !strings.Contains(call.htmlBody, "cid:"+att.ContentID) {
+		t.Errorf("htmlBody does not reference cid:%s", att.ContentID)
+	}
+	if att.ContentType != "image/png" || string(att.Attachment) != "hello" {
+		t.Errorf("attachment bytes/type not carried through correctly: %+v", att)
+	}
+}
+
 // TestDispatcher_Handle_CommentAdded_InternalNote_UsesInternalNoteLayout
 // verifies that isInternalNote:true routes through RenderInternalNoteEmail
 // instead of RenderCommentAddedEmail: the "added work note" wording (not
@@ -739,7 +796,7 @@ func TestDispatcher_Handle_SeverityChanged(t *testing.T) {
 	if len(gotEmail.to) != 1 || gotEmail.to[0] != testRecipient {
 		t.Errorf("to = %v, want [%s]", gotEmail.to, testRecipient)
 	}
-	if !strings.Contains(gotEmail.htmlBody, "High (P2)") || !strings.Contains(gotEmail.htmlBody, "Low (P4)") {
+	if !strings.Contains(gotEmail.htmlBody, "High(S2)") || !strings.Contains(gotEmail.htmlBody, "Low(S4)") {
 		t.Error("htmlBody does not contain both the old and new severity labels")
 	}
 
@@ -1534,6 +1591,10 @@ type blockingEmailSender struct {
 }
 
 func (s *blockingEmailSender) FromAddress() string { return "noreply@wso2.com" }
+
+func (s *blockingEmailSender) SendEmailFrom(ctx context.Context, from string, to, cc, bcc, replyTo []string, subject, htmlBody string, attachments []notifications.EmailAttachment) error {
+	return s.SendEmail(ctx, to, cc, bcc, replyTo, subject, htmlBody, attachments)
+}
 
 func (s *blockingEmailSender) SendEmail(ctx context.Context, to, cc, bcc, replyTo []string, subject, htmlBody string, attachments []notifications.EmailAttachment) error {
 	atomic.AddInt32(&s.calls, 1)

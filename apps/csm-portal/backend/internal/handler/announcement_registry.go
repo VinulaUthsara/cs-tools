@@ -92,13 +92,37 @@ type registryCaseSearchResponse struct {
 // registryAnnouncementRequestView is the minimal subset of entity-service's
 // domain.AnnouncementRequest this handler needs.
 type registryAnnouncementRequestView struct {
-	ID                   string   `json:"id"`
-	Subject              string   `json:"subject"`
-	CreatedBy            string   `json:"createdBy"`
-	CreatedAt            string   `json:"createdAt"`
-	UpdatedAt            string   `json:"updatedAt"`
-	ResolvedProjectCount *int     `json:"resolvedProjectCount"`
-	PublishedCaseIDs     []string `json:"publishedCaseIds"`
+	ID      string `json:"id"`
+	Subject string `json:"subject"`
+	// CreatedBy is the raw IdP account id -- opaque, not human-readable (see
+	// CreatedByEmail's own doc comment). Never shown to the caller directly;
+	// resolveBatchCreatedBy prefers CreatedByEmail whenever it's set.
+	CreatedBy string `json:"createdBy"`
+	// CreatedByEmail is a display-only companion to CreatedBy, resolved at
+	// the moment the request was created (see entity-service's
+	// AnnouncementRequest.CreatedByEmail doc comment). Nil for a row written
+	// before this field existed.
+	CreatedByEmail         *string  `json:"createdByEmail"`
+	CreatedAt              string   `json:"createdAt"`
+	UpdatedAt              string   `json:"updatedAt"`
+	IsSecurityAnnouncement bool     `json:"isSecurityAnnouncement"`
+	ResolvedProjectCount   *int     `json:"resolvedProjectCount"`
+	PublishedCaseIDs       []string `json:"publishedCaseIds"`
+}
+
+// resolveBatchCreatedBy prefers the request's own resolved email over its
+// raw IdP account id -- the same "prefer the display-only email" precedent
+// the Pending tab's own row already follows (r.createdByEmail || r.createdBy),
+// just applied here too: a batch row's own CreatedBy used to always be the
+// raw id, unlike a "case" row (built from the case's own already-resolved
+// CreatedBy.Name/Email pair below), which is what made the mismatch visible
+// live -- a grouped batch showed a raw UUID right next to case rows showing
+// real names.
+func resolveBatchCreatedBy(reqView registryAnnouncementRequestView) string {
+	if reqView.CreatedByEmail != nil && *reqView.CreatedByEmail != "" {
+		return *reqView.CreatedByEmail
+	}
+	return reqView.CreatedBy
 }
 
 type registryAnnouncementRequestSearchResponse struct {
@@ -140,6 +164,14 @@ type registryRow struct {
 	AnnouncementRequestID string               `json:"announcementRequestId,omitempty"`
 	ProjectCount          int                  `json:"projectCount,omitempty"`
 	Cases                 []registryCaseMember `json:"cases,omitempty"`
+	// IsSecurityAnnouncement is only meaningful for kind="batch": a "case"
+	// row has no owning request to read the flag from, and this handler has
+	// no cheap way to know whether a bare legacy case carries the security
+	// tag itself (SearchCases doesn't return a case's tags at all, only
+	// GetCaseByID does — see CaseView.Tags' own doc comment; doing that
+	// per-row would mean one extra upstream call per legacy case on every
+	// page). Left false for "case" rows rather than guessed at.
+	IsSecurityAnnouncement bool `json:"isSecurityAnnouncement,omitempty"`
 
 	// Case-only.
 	CaseID      string `json:"caseId,omitempty"`
@@ -381,13 +413,14 @@ func (h *AnnouncementRegistryHandler) SearchAnnouncementRegistry(w http.Response
 			rowAddedForRequestID[reqView.ID] = true
 			memberIDsByRow[len(rows)] = reqView.PublishedCaseIDs
 			rows = append(rows, registryRow{
-				Kind:                  "batch",
-				Subject:               reqView.Subject,
-				CreatedBy:             reqView.CreatedBy,
-				CreatedOn:             reqView.CreatedAt,
-				UpdatedOn:             reqView.UpdatedAt,
-				AnnouncementRequestID: reqView.ID,
-				ProjectCount:          projectCount,
+				Kind:                   "batch",
+				Subject:                reqView.Subject,
+				CreatedBy:              resolveBatchCreatedBy(*reqView),
+				CreatedOn:              reqView.CreatedAt,
+				UpdatedOn:              reqView.UpdatedAt,
+				AnnouncementRequestID:  reqView.ID,
+				ProjectCount:           projectCount,
+				IsSecurityAnnouncement: reqView.IsSecurityAnnouncement,
 			})
 			continue
 		}
