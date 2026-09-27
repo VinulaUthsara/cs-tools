@@ -53,7 +53,7 @@ export default function ListMyAccounts({ active }: { active: boolean }) {
           setRowsPerPage={setRowsPerPage}
           colNameArray={colNameArray}
           colAttributeArray={colAttributeArray}
-          handleRowClick={(rowData) => navigate(`/spl/accounts/${rowData.number}`)}
+          handleRowClick={(rowData) => navigate(`/spl/accounts/${rowData.id}`)}
         />
       )}
     </>

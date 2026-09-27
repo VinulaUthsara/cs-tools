@@ -18,6 +18,8 @@
 // carries a few fields (accountName, accountNumber, totalQueryHours,
 // projectType) beyond what's declared below.
 export interface ProjectDetails {
+  /** entity-service's internal UUID -- same value as sysId. */
+  id?: string;
   number: string;
   sysId: string;
   name: string;
@@ -28,6 +30,8 @@ export interface ProjectDetails {
   closureState: string;
   accountNumber?: string;
   accountName?: string;
+  /** entity-service's internal UUID for the linked account -- used for navigation, not display. */
+  accountId?: string;
   totalQueryHours?: string;
   projectType?: string;
   [key: string]: unknown;
@@ -41,6 +45,9 @@ export interface Contact {
 }
 
 export interface CaseDetails {
+  /** entity-service's internal UUID -- same value as sysId. */
+  id?: string;
+  sysId?: string;
   number: string;
   caseId: string;
   caseType: string;

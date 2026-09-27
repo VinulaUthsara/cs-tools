@@ -40,7 +40,7 @@ export default function ListAccountProjects({ id }: { id: string }) {
       setRowsPerPage={setRowsPerPage}
       colNameArray={colNameArray}
       colAttributeArray={colAttributeArray}
-      handleRowClick={(rowData) => navigate(`/spl/accounts/${id}/projects/${rowData.number}`)}
+      handleRowClick={(rowData) => navigate(`/spl/accounts/${id}/projects/${rowData.id}`)}
     />
   );
 }

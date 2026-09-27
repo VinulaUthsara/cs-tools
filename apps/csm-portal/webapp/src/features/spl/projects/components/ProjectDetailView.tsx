@@ -44,7 +44,7 @@ export default function ProjectDetailView({ id }: { id: string }) {
 
   return (
     <>
-      <ProjectPathView accountName={data.accountName} accountNumber={data.accountNumber} projectKey={data.key} />
+      <ProjectPathView accountName={data.accountName} accountNumber={data.accountId} projectKey={data.key} />
       <ProjectHeading data={data} />
       <Tabs value={tabValue} onChange={(_e, v) => setTabValue(v)} aria-label="Project Tabs">
         <Tab label="Basic Info" />

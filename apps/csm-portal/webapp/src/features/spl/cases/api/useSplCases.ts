@@ -14,19 +14,98 @@
 // specific language governing permissions and limitations
 // under the License.
 
-// React Query hooks for the /spl/cases* endpoints (Go backend,
-// cs-tools/apps/csm-portal/backend). Replaces the source app's own
-// useSplApi.ts (useGetApi/usePostApi) — this app's CLAUDE.md mandates React
-// Query as the only data-fetching layer.
-//
-// Query keys are plain string literals ("spl-cases", not an
-// ApiQueryKeys.SPL_CASES enum member) — deliberately not extending the
-// shared @constants/apiConstants enum here, since several other SPL-domain
-// ports are landing concurrently and each touching that same shared file
-// would collide. Consolidate into the enum in a follow-up if desired.
+// React Query hooks for SPL's case domain. Search/get/comments/worknote
+// used to call this backend's own /spl/cases* routes (a ServiceNow-shaped
+// translation of entity-service data); all four now call CS Portal's own
+// /cases routes directly, since SPL's data source for them is the exact
+// same entity-service data those routes already serve raw -- see cs-tools'
+// csm-portal-backend main.go SPL route registration comment. Attachments
+// keep calling /spl/cases/*: no entity-service storage/backfill path exists
+// yet, so nothing to merge onto.
 import { useMutation, useQuery, useQueryClient, type UseQueryResult } from "@tanstack/react-query";
 import { useBackendApi, BackendApiError } from "@api/backend/client";
 import type { CaseCommentDetails, CaseDetails, CaseDetailsWithCount } from "./splCaseTypes";
+
+// caseStateFromDisplay/caseStateToDisplay translate between the six display
+// labels SPL's UI has always used (ServiceNow's own state labels, e.g. "Work
+// In Progress" -- see CaseStateCard.tsx/SplCasesPage.tsx, which are NOT
+// changing as part of this) and entity-service's domain.CaseState wire
+// values (lowercase snake_case, e.g. "work_in_progress"). "closed" has no
+// SPL summary card and is deliberately not in caseStateFromDisplay -- SPL's
+// UI never asks to filter by a label it doesn't offer.
+const caseStateFromDisplay: Record<string, string> = {
+  Open: "open",
+  "Work In Progress": "work_in_progress",
+  "Awaiting Info": "awaiting_info",
+  "Solution Proposed": "solution_proposed",
+  "Waiting on WSO2": "waiting_on_wso2",
+  Reopened: "reopened",
+};
+const caseStateToDisplay: Record<string, string> = {
+  open: "Open",
+  work_in_progress: "Work In Progress",
+  awaiting_info: "Awaiting Info",
+  solution_proposed: "Solution Proposed",
+  waiting_on_wso2: "Waiting on WSO2",
+  reopened: "Reopened",
+  closed: "Closed",
+};
+
+interface EntityRef {
+  id: string;
+  name: string;
+}
+interface EntityUserRef {
+  id: string | null;
+  email: string;
+  name: string;
+}
+interface EntitySearchCaseView {
+  id: string;
+  internalId: string;
+  number: string;
+  createdOn: string;
+  subject: string | null;
+  description: string | null;
+  state: string | null;
+  product: EntityRef | null;
+  project: EntityRef | null;
+  projectKey: string | null;
+  assignedEngineer: EntityUserRef | null;
+  account: EntityRef | null;
+}
+interface EntitySearchCasesResponse {
+  cases: EntitySearchCaseView[];
+  total: number;
+}
+
+function toCaseDetails(v: EntitySearchCaseView): CaseDetails {
+  const state = v.state ?? "";
+  return {
+    id: v.id,
+    caseId: v.internalId,
+    number: v.number,
+    caseType: "case",
+    priority: "",
+    shortDescription: v.subject ?? "",
+    description: v.description ?? "",
+    state: caseStateToDisplay[state] ?? state,
+    openedAt: v.createdOn,
+    openedBy: "",
+    assignedTo: v.assignedEngineer?.name ?? "",
+    accountNumber: "",
+    accountName: v.account?.name ?? "",
+    accountId: v.account?.id,
+    projectNumber: v.projectKey ?? "",
+    projectKey: v.projectKey ?? "",
+    projectId: v.project?.id,
+    productName: v.product?.name ?? "",
+    lastWSO2CommentTime: "",
+    lastCustomerCommentTime: "",
+    projectDeploymentName: "",
+    projectDeploymentType: "",
+  };
+}
 
 export function useGetSplCases(
   stateFilter: string,
@@ -35,16 +114,18 @@ export function useGetSplCases(
 ): UseQueryResult<CaseDetailsWithCount, Error> {
   const api = useBackendApi();
   return useQuery<CaseDetailsWithCount, Error>({
-    queryKey: ["spl-cases", stateFilter, offset, limit],
+    queryKey: ["cases-search", stateFilter, offset, limit],
     queryFn: async () => {
-      const params = new URLSearchParams({
-        stateFilter,
-        offset: String(offset),
-        limit: String(limit),
-      });
-      const data = await api.get<CaseDetailsWithCount>(`/spl/cases?${params.toString()}`);
-      if (!data) throw new BackendApiError(404, "Not found");
-      return data;
+      const entityState = caseStateFromDisplay[stateFilter];
+      const body = {
+        filters: {
+          filters: entityState ? [{ field: "state", op: "in", values: [entityState] }] : [],
+        },
+        sortBy: { field: "createdOn", order: "desc" },
+        pagination: { offset, limit },
+      };
+      const data = await api.post<typeof body, EntitySearchCasesResponse>("/cases/search", body);
+      return { count: data.total, cases: (data.cases ?? []).map(toCaseDetails) };
     },
   });
 }
@@ -52,19 +133,39 @@ export function useGetSplCases(
 export function useGetSplCase(caseId: string): UseQueryResult<CaseDetails, Error> {
   const api = useBackendApi();
   return useQuery<CaseDetails, Error>({
-    queryKey: ["spl-case", caseId],
+    queryKey: ["case", caseId],
     enabled: Boolean(caseId),
     queryFn: async () => {
-      const data = await api.get<CaseDetails>(`/spl/cases/${encodeURIComponent(caseId)}`);
+      const data = await api.get<EntitySearchCaseView>(`/cases/${encodeURIComponent(caseId)}`);
       if (!data) throw new BackendApiError(404, "Case not found");
-      return data;
+      return toCaseDetails(data);
     },
   });
 }
 
+interface EntityCaseComment {
+  type: "work_note" | "comment" | "activity";
+  content: string;
+  createdBy: EntityUserRef | null;
+  createdOn: string;
+}
+interface EntityCaseCommentsResponse {
+  total: number;
+  comments: EntityCaseComment[];
+}
 interface CaseCommentsResponse {
   total: number;
   comments: CaseCommentDetails[];
+}
+
+// commentTypeToDisplay maps entity-service's CommentType wire values to the
+// two labels SPL's UI has always used (see CaseCommentDetails.type in
+// splCaseTypes.ts) -- "activity" (system-generated field-change entries)
+// has no SPL display bucket and is filtered out below, same as before.
+function commentTypeToDisplay(t: EntityCaseComment["type"]): "comments" | "work_notes" | null {
+  if (t === "comment") return "comments";
+  if (t === "work_note") return "work_notes";
+  return null;
 }
 
 export function useGetSplCaseComments(
@@ -74,14 +175,27 @@ export function useGetSplCaseComments(
 ): UseQueryResult<CaseCommentsResponse, Error> {
   const api = useBackendApi();
   return useQuery<CaseCommentsResponse, Error>({
-    queryKey: ["spl-case-comments", caseId, offset, limit],
+    queryKey: ["case-comments", caseId, offset, limit],
     enabled: Boolean(caseId),
     queryFn: async () => {
-      const params = new URLSearchParams({ offset: String(offset), limit: String(limit) });
-      const data = await api.get<CaseCommentsResponse>(
-        `/spl/cases/${encodeURIComponent(caseId)}/comments-and-worknotes?${params.toString()}`,
+      const body = { pagination: { offset, limit } };
+      const data = await api.post<typeof body, EntityCaseCommentsResponse>(
+        `/cases/${encodeURIComponent(caseId)}/comments/search`,
+        body,
       );
-      return data ?? { total: 0, comments: [] };
+      const comments: CaseCommentDetails[] = [];
+      for (const c of data.comments ?? []) {
+        const type = commentTypeToDisplay(c.type);
+        if (!type) continue;
+        comments.push({
+          createdOn: c.createdOn,
+          caseType: "case",
+          type,
+          value: c.content,
+          createdBy: c.createdBy?.name ?? c.createdBy?.email ?? "",
+        });
+      }
+      return { total: data.total, comments };
     },
   });
 }
@@ -98,22 +212,21 @@ export function useGetSplCaseAttachments(caseId: string) {
   });
 }
 
-/** Go backend's WorkNoteResponse — {number, updatedOn}, never read by callers here (only success/failure matters). */
-interface WorkNoteResponse {
-  number: string;
-  updatedOn: string;
+interface EntityCreateCommentResponse {
+  comment: { id: string; createdOn: string; createdBy: string };
 }
 
 export function usePostSplWorkNote(caseId: string) {
   const api = useBackendApi();
   const queryClient = useQueryClient();
-  return useMutation<WorkNoteResponse, Error, string>({
+  return useMutation<EntityCreateCommentResponse, Error, string>({
     mutationFn: (worknote: string) =>
-      api.post<{ worknote: string }, WorkNoteResponse>(`/spl/cases/${encodeURIComponent(caseId)}/worknote`, {
-        worknote,
-      }),
+      api.post<{ type: string; content: string }, EntityCreateCommentResponse>(
+        `/cases/${encodeURIComponent(caseId)}/comments`,
+        { type: "work_note", content: worknote },
+      ),
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ["spl-case-comments", caseId] });
+      void queryClient.invalidateQueries({ queryKey: ["case-comments", caseId] });
     },
   });
 }

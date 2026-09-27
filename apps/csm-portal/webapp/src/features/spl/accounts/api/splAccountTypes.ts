@@ -24,6 +24,8 @@ export interface DataStruct {
 }
 
 export interface AccountDetails extends DataStruct {
+  /** entity-service's internal UUID -- the id every navigation link now uses. */
+  id: string;
   number: string;
   name: string;
   region: string;
@@ -35,6 +37,10 @@ export interface AccountDetails extends DataStruct {
   customerSuccessManager: string;
   rating: string;
   driveLocation: string;
+  integrationCSTeamName?: string;
+  integrationCSTeamSysId?: string;
+  /** Internal to useSplAccountsApi.ts's client-side "active" filter -- not rendered. */
+  _deactivationDate?: string | null;
 }
 
 export interface ProjectDetails extends DataStruct {

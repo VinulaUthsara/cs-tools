@@ -62,7 +62,7 @@ export function SearchResultBox({
               key={index}
               variant="outlined"
               sx={{ p: 2, cursor: "pointer", "&:hover": { backgroundColor: hoverBg } }}
-              onClick={() => navigateTo(item.number)}
+              onClick={() => navigateTo(item.id)}
             >
               <Typography variant="subtitle1" fontWeight={700}>
                 {item.caseId}
@@ -77,7 +77,7 @@ export function SearchResultBox({
               key={index}
               variant="outlined"
               sx={{ p: 2, cursor: "pointer", "&:hover": { backgroundColor: hoverBg } }}
-              onClick={() => navigateTo(item.number)}
+              onClick={() => navigateTo(item.id)}
             >
               <Typography variant="subtitle1" fontWeight={700}>
                 {item.name}

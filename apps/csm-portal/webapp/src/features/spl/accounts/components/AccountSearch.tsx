@@ -68,7 +68,7 @@ export default function AccountSearch({
           ) : (
             <List disablePadding>
               {data.map((item) => (
-                <ListItemButton key={item.number} onClick={() => navigate(`/spl/accounts/${item.number}`)}>
+                <ListItemButton key={item.number} onClick={() => navigate(`/spl/accounts/${item.id}`)}>
                   <ListItemText primary={item.name} secondary={item.number} />
                 </ListItemButton>
               ))}

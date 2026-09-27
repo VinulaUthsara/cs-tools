@@ -24,6 +24,8 @@ export interface DataStruct {
 }
 
 export interface CaseDetails extends DataStruct {
+  /** entity-service's internal UUID -- the id every navigation link now uses. */
+  id: string;
   caseId: string;
   caseType: string;
   number: string;
@@ -36,8 +38,12 @@ export interface CaseDetails extends DataStruct {
   assignedTo: string;
   accountNumber: string;
   accountName: string;
+  /** entity-service's internal UUID for the linked account -- used for navigation, not display. */
+  accountId?: string;
   projectNumber: string;
   projectKey: string;
+  /** entity-service's internal UUID for the linked project -- used for navigation, not display. */
+  projectId?: string;
   productName: string;
   lastWSO2CommentTime: string;
   lastCustomerCommentTime: string;
@@ -72,11 +78,15 @@ export interface AttachmentDetails extends DataStruct {
 }
 
 export interface ProjectSummary extends DataStruct {
+  /** entity-service's internal UUID -- used for navigation, not display. */
+  id: string;
   number: string;
   name: string;
 }
 
 export interface AccountSummary extends DataStruct {
+  /** entity-service's internal UUID -- used for navigation, not display. */
+  id: string;
   number: string;
   name: string;
 }

@@ -35,8 +35,18 @@ function getCommentKey(comment: CaseCommentDetails): string {
   return `${comment.createdOn}_${comment.createdBy}_${comment.type}`;
 }
 
+// entity-service's own createdOn (via the accounts/projects/cases merge --
+// see cs-tools' main.go route registration comment) is already a full
+// RFC3339 timestamp with its own "Z"/offset; the old ServiceNow-backed value
+// this was written against was a bare "YYYY-MM-DDTHH:mm:ss" needing one
+// appended. Only append when it's actually missing one, so entity-service's
+// value isn't turned into an invalid "...ssssssZZ" string.
+function withTimezone(dateTime: string): string {
+  return /[Zz]$|[+-]\d{2}:?\d{2}$/.test(dateTime) ? dateTime : dateTime + "Z";
+}
+
 function getTimeDifference(createdOn: string): string {
-  const createdDate = new Date(createdOn + "Z");
+  const createdDate = new Date(withTimezone(createdOn));
   const now = new Date();
   const diffMinutes = Math.floor((now.getTime() - createdDate.getTime()) / 60000);
   const diffHours = Math.floor(diffMinutes / 60);
@@ -131,7 +141,7 @@ function CommentEntry({ item }: { item: CaseCommentDetails }) {
         <Stack direction="row" spacing={1} alignItems="center" sx={{ color: "text.secondary", mb: 1 }}>
           {item.type === "comments" ? <ClockIcon size={16} /> : <StickyNoteIcon size={16} />}
           <Typography variant="caption">
-            {new Date(item.createdOn + "Z").toLocaleString()} ({getTimeDifference(item.createdOn)})
+            {new Date(withTimezone(item.createdOn)).toLocaleString()} ({getTimeDifference(item.createdOn)})
           </Typography>
           <Typography variant="caption" fontWeight={600}>
             {item.createdBy}

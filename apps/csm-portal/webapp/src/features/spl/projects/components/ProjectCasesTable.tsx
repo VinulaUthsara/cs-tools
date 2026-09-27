@@ -80,7 +80,7 @@ export default function ProjectCasesTable({ id, isTypeCloud }: { id: string; isT
     setStateValues(typeof value === "string" ? value.split(",") : value);
   };
   const handleCaseTableRowClick = (rowData: CaseDetails) => {
-    window.open(`/spl/cases/${rowData.number}`, "_blank");
+    window.open(`/spl/cases/${rowData.id}`, "_blank");
   };
 
   const colNameArray = ["Number", "Case ID", "Short Description", "Case Type", "Priority", "State"];

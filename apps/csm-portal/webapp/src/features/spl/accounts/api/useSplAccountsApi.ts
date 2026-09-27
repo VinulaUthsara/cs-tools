@@ -14,12 +14,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
-// React Query hooks for the /spl/accounts* Go backend routes — replaces
-// apps/support-portal-lite/webapp's useGetApi/usePostApi (useSplApi.ts)
-// with this app's useBackendApi()/React Query convention (see
-// useGetCsmCases.ts for the shape this mirrors). Same backend calls, same
-// /spl path prefix, just through this app's own auth-aware client instead
-// of a separate one.
+// React Query hooks for SPL's account domain. Search/get/projects used to
+// call this backend's own /spl/accounts* routes (a ServiceNow-shaped
+// translation of entity-service data); all three now call CS Portal's own
+// /accounts and /projects routes directly, since SPL's data source for them
+// is the exact same entity-service data those routes already serve raw --
+// see cs-tools' csm-portal-backend main.go SPL route registration comment.
+// Escalations (read and create) keep calling /spl/accounts/*: no
+// entity-service equivalent exists for either (CreateEscalation is an
+// explicit stub there), so nothing to merge onto.
 import { useQuery, useMutation, type UseQueryResult } from "@tanstack/react-query";
 import { useBackendApi } from "@api/backend/client";
 import type {
@@ -27,6 +30,108 @@ import type {
   ABTTeamMembersDetails,
   EscalationDetails,
 } from "./splAccountTypes";
+import type { ProjectDetails } from "../../projects/projectTypes";
+
+// --- entity-service response shapes (this app's own copy of the JSON
+// contract entity-service returns raw through CS Portal's /accounts and
+// /projects routes -- see useGetAccount.ts/useSearchAccounts.ts in
+// @features/csm-accounts for the reference shape this mirrors). ---
+
+interface EntityPersonRef {
+  id: string | null;
+  name: string;
+  email?: string | null;
+}
+interface EntityTeamRef {
+  id: string;
+  name: string;
+}
+interface EntityAccountView {
+  id: string;
+  number: string;
+  name: string;
+  region: string | null;
+  country: string | null;
+  city: string | null;
+  driveLocation: string | null;
+  accountManager: EntityPersonRef | null;
+  technicalOwner: EntityPersonRef | null;
+  customerSuccessManager: EntityPersonRef | null;
+  creTeam: EntityTeamRef | null;
+  deactivationDate: string | null;
+}
+interface EntitySearchAccountsResponse {
+  accounts: EntityAccountView[];
+  total: number;
+}
+interface EntityProjectAccountRef {
+  id: string;
+  name: string;
+  number: string;
+}
+interface EntityProjectView {
+  id: string;
+  name: string;
+  key: string;
+  startDate: string | null;
+  endDate: string | null;
+  account: EntityProjectAccountRef | null;
+}
+interface EntitySearchProjectsResponse {
+  projects: EntityProjectView[];
+  total: number;
+}
+
+// toAccountDetails adapts entity-service's raw account shape into the
+// AccountDetails shape every SPL account UI component already renders --
+// keeps ListAccounts.tsx/ListAccountDetail.tsx/etc. unchanged. ARR/rating
+// have no entity-service equivalent (SupportTier/ArrToday are always nil on
+// this data source -- a documented gap, not new here: SPL's own
+// ServiceNow/Postgres translation layer always left these blank too).
+function toAccountDetails(a: EntityAccountView): AccountDetails {
+  return {
+    id: a.id,
+    number: a.number,
+    name: a.name,
+    region: a.region ?? "",
+    country: a.country ?? "",
+    city: a.city ?? "",
+    arr: "",
+    accountManager: a.accountManager?.name ?? "",
+    technicalOwner: a.technicalOwner?.name ?? "",
+    customerSuccessManager: a.customerSuccessManager?.name ?? "",
+    rating: "",
+    driveLocation: a.driveLocation ?? "",
+    // integrationCSTeam* mirrors the field names the OLD /spl/accounts/{id}
+    // response used (see ListAccountDetail.tsx/TeamMembersDrawer.tsx, which
+    // read these through AccountDetails' DataStruct index signature) so
+    // those components need no changes -- only the source of the value
+    // changed, from a ServiceNow group lookup to entity-service's own
+    // creTeam ref.
+    integrationCSTeamName: a.creTeam?.name ?? "",
+    integrationCSTeamSysId: a.creTeam?.id ?? "",
+    _deactivationDate: a.deactivationDate,
+  };
+}
+
+function toProjectDetails(p: EntityProjectView): ProjectDetails {
+  return {
+    id: p.id,
+    // Postgres has no project "number" distinct from "key" -- the same
+    // documented substitution the old backend translation layer made.
+    number: p.key,
+    sysId: p.id,
+    name: p.name,
+    key: p.key,
+    startDate: p.startDate ?? "",
+    endDate: p.endDate ?? "",
+    remainingQueryHours: "",
+    closureState: "",
+    accountNumber: p.account?.number,
+    accountId: p.account?.id,
+    accountName: p.account?.name,
+  };
+}
 
 export function useSearchAccounts(params: {
   email?: string;
@@ -40,12 +145,21 @@ export function useSearchAccounts(params: {
   const { email, phrase, offset, limit, active, enabled = true } = params;
 
   return useQuery<AccountDetails[], Error>({
-    queryKey: ["spl-accounts", email ?? "", phrase ?? "", offset, limit, active],
-    queryFn: () => {
-      const qs = new URLSearchParams({ offset: String(offset), limit: String(limit), active: String(active) });
-      if (email) qs.set("email", email);
-      if (phrase) qs.set("phrase", phrase);
-      return api.get<AccountDetails[]>(`/spl/accounts?${qs.toString()}`).then((r) => r ?? []);
+    queryKey: ["accounts-search", email ?? "", phrase ?? "", offset, limit, active],
+    queryFn: async () => {
+      const body: Record<string, unknown> = {
+        filters: { searchQuery: phrase ?? "", ownerEmail: email ?? "" },
+        pagination: { offset, limit },
+      };
+      const resp = await api.post<typeof body, EntitySearchAccountsResponse>("/accounts/search", body);
+      const accounts = (resp?.accounts ?? []).map(toAccountDetails);
+      // "active" has no entity-service search filter (no server-side
+      // concept yet) -- filtered client-side instead, same visible result
+      // as before for this page size. A documented limitation: an
+      // inactive account on the current page still counts toward the
+      // page's own offset/limit math, so "Active accounts" can show fewer
+      // than a full page near the end of a large list.
+      return active ? accounts.filter((a) => !a._deactivationDate) : accounts;
     },
     enabled,
   });
@@ -54,8 +168,11 @@ export function useSearchAccounts(params: {
 export function useGetAccount(id: string): UseQueryResult<AccountDetails | null, Error> {
   const api = useBackendApi();
   return useQuery<AccountDetails | null, Error>({
-    queryKey: ["spl-account", id],
-    queryFn: () => api.get<AccountDetails>(`/spl/accounts/${encodeURIComponent(id)}`),
+    queryKey: ["account", id],
+    queryFn: async () => {
+      const a = await api.get<EntityAccountView>(`/accounts/${encodeURIComponent(id)}`);
+      return a ? toAccountDetails(a) : null;
+    },
     enabled: Boolean(id),
   });
 }
@@ -64,16 +181,17 @@ export function useGetAccountProjects(
   accountId: string,
   offset: number,
   limit: number,
-): UseQueryResult<import("./splAccountTypes").ProjectDetails[], Error> {
+): UseQueryResult<ProjectDetails[], Error> {
   const api = useBackendApi();
   return useQuery({
-    queryKey: ["spl-account-projects", accountId, offset, limit],
-    queryFn: () =>
-      api
-        .get<import("./splAccountTypes").ProjectDetails[]>(
-          `/spl/accounts/${encodeURIComponent(accountId)}/projects?offset=${offset}&limit=${limit}`,
-        )
-        .then((r) => r ?? []),
+    queryKey: ["account-projects", accountId, offset, limit],
+    queryFn: async () => {
+      const resp = await api.post<Record<string, unknown>, EntitySearchProjectsResponse>("/projects/search", {
+        accountId,
+        pagination: { offset, limit },
+      });
+      return (resp?.projects ?? []).map(toProjectDetails);
+    },
     enabled: Boolean(accountId),
   });
 }
@@ -118,11 +236,8 @@ export function useEscalateCase(accountId: string, caseId: string) {
 export function useGetAbtTeamMembers(teamId: string): UseQueryResult<ABTTeamMembersDetails[], Error> {
   const api = useBackendApi();
   return useQuery<ABTTeamMembersDetails[], Error>({
-    queryKey: ["spl-abt-team-members", teamId],
-    queryFn: () =>
-      api
-        .get<ABTTeamMembersDetails[]>(`/spl/abt-team-members?teamId=${encodeURIComponent(teamId)}`)
-        .then((r) => r ?? []),
+    queryKey: ["team-members", teamId],
+    queryFn: () => api.get<ABTTeamMembersDetails[]>(`/teams/${encodeURIComponent(teamId)}/members`).then((r) => r ?? []),
     enabled: Boolean(teamId),
   });
 }

@@ -49,7 +49,7 @@ export default function CaseStateView({
   const colNameArray = ["Number", "Case ID", "Short Description", "Case Type", "Priority", "State"];
   const colAttributeArray = ["number", "caseId", "shortDescription", "caseType", "priority", "state"];
 
-  const handleRowClick = (rowData: CaseDetails) => navigate(`/spl/cases/${rowData.number}`);
+  const handleRowClick = (rowData: CaseDetails) => navigate(`/spl/cases/${rowData.id}`);
 
   return (
     <>

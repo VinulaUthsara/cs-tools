@@ -75,7 +75,7 @@ export default function ProjectSearch({ setShowTable }: { setShowTable: (value: 
           ) : (
             <List dense>
               {results.map((item) => (
-                <ListItemButton key={item.number} onClick={() => navigate(`/spl/projects/${item.number}`)}>
+                <ListItemButton key={item.number} onClick={() => navigate(`/spl/projects/${item.sysId}`)}>
                   <ListItemText primary={item.name} secondary={item.number} />
                 </ListItemButton>
               ))}

@@ -69,7 +69,7 @@ export default function ListAccountDetail({ id }: { id: string }) {
       ) : (
         data && (
           <>
-            <PathView accountName={data.name} accountNumber={data.number} />
+            <PathView accountName={data.name} accountNumber={data.id} />
             <AccountHeading data={data} showViewOnDriveButton={value === 3} />
             <Tabs value={value} onChange={(_e, v: number) => setTabValue(v)} aria-label="Account Tabs">
               <Tab label="Basic Info" />

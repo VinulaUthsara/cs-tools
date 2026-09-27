@@ -110,8 +110,8 @@ export default function SplCaseDetailPage() {
       <PathView
         accountName={data.accountName || data.accountNumber}
         projectKey={data.projectKey || data.projectNumber}
-        accountNumber={data.accountNumber}
-        projectNumber={data.projectNumber}
+        accountNumber={data.accountId}
+        projectNumber={data.projectId}
         caseKey={data.caseId.split("-")[1]}
       />
 

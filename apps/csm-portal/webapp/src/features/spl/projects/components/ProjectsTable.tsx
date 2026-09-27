@@ -42,7 +42,7 @@ export default function ProjectsTable() {
           setRowsPerPage={setRowsPerPage}
           colNameArray={["Number", "Name", "Key", "Start Date", "End Date", "Remaining Query Hours"]}
           colAttributeArray={["number", "name", "key", "startDate", "endDate", "remainingQueryHours"]}
-          handleRowClick={(rowData) => navigate(`/spl/projects/${rowData.number}`)}
+          handleRowClick={(rowData) => navigate(`/spl/projects/${rowData.sysId}`)}
         />
       )}
     </>

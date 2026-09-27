@@ -33,6 +33,58 @@ import type { CaseDetailsWithCount, AccountSummary, ProjectSummary } from "../ap
 type SearchOptions = "account" | "myAccount" | "case" | "project";
 type SearchResult = CaseDetailsWithCount | AccountSummary[] | ProjectSummary[];
 
+// Account/project/case search used to call this backend's own /spl/accounts,
+// /spl/projects, /spl/cases GET routes directly; all three now call CS
+// Portal's own POST /accounts/search, /projects/search, /cases/search --
+// see useSplAccountsApi.ts/useSplProjectsApi.ts/useSplCases.ts for the same
+// merge, and cs-tools' csm-portal-backend main.go SPL route registration
+// comment for why. Kept as a raw fetch here (not those hooks' React Query
+// versions) since this is a debounced free-text search, not a cacheable
+// query keyed on stable params.
+interface EntityRef {
+  id: string;
+  name: string;
+}
+interface EntityAccountSearchItem {
+  id: string;
+  number: string;
+  name: string;
+}
+interface EntitySearchAccountsResponse {
+  accounts: EntityAccountSearchItem[];
+}
+interface EntityProjectSearchItem {
+  id: string;
+  key: string;
+  name: string;
+}
+interface EntitySearchProjectsResponse {
+  projects: EntityProjectSearchItem[];
+}
+interface EntityCaseSearchItem {
+  id: string;
+  internalId: string;
+  number: string;
+  subject: string | null;
+  state: string | null;
+  caseType?: string;
+  priority?: string;
+  product: EntityRef | null;
+}
+interface EntitySearchCasesResponse {
+  cases: EntityCaseSearchItem[];
+  total: number;
+}
+const caseStateToDisplay: Record<string, string> = {
+  open: "Open",
+  work_in_progress: "Work In Progress",
+  awaiting_info: "Awaiting Info",
+  solution_proposed: "Solution Proposed",
+  waiting_on_wso2: "Waiting on WSO2",
+  reopened: "Reopened",
+  closed: "Closed",
+};
+
 export default function Search({
   searchOption,
   setShowTable,
@@ -53,18 +105,66 @@ export default function Search({
 
   useEffect(() => {
     if (inputValue.length < 4) return;
-    let endpoint = "";
-    if (searchOption === "account") endpoint = `/spl/accounts?phrase=${encodeURIComponent(inputValue)}&offset=0&limit=10`;
-    else if (searchOption === "myAccount")
-      endpoint = `/spl/accounts?email=${encodeURIComponent(email ?? "")}&phrase=${encodeURIComponent(inputValue)}&offset=0&limit=10`;
-    else if (searchOption === "case") endpoint = `/spl/cases?phrase=${encodeURIComponent(inputValue)}&offset=0&limit=10`;
-    else if (searchOption === "project") endpoint = `/spl/projects?phrase=${encodeURIComponent(inputValue)}&offset=0&limit=10`;
-
     let cancelled = false;
-    api
-      .get<SearchResult>(endpoint)
+    const pagination = { offset: 0, limit: 10 };
+
+    let request: Promise<SearchResult>;
+    if (searchOption === "account" || searchOption === "myAccount") {
+      const body = {
+        filters: {
+          searchQuery: inputValue,
+          ownerEmail: searchOption === "myAccount" ? email ?? "" : "",
+        },
+        pagination,
+      };
+      request = api
+        .post<typeof body, EntitySearchAccountsResponse>("/accounts/search", body)
+        .then((r): AccountSummary[] => (r.accounts ?? []).map((a) => ({ id: a.id, number: a.number, name: a.name })));
+    } else if (searchOption === "project") {
+      const body = { searchQuery: inputValue, pagination };
+      request = api
+        .post<typeof body, EntitySearchProjectsResponse>("/projects/search", body)
+        .then((r): ProjectSummary[] => (r.projects ?? []).map((p) => ({ id: p.id, number: p.key, name: p.name })));
+    } else {
+      const body = {
+        filters: { searchQuery: inputValue, filters: [] },
+        sortBy: { field: "createdOn", order: "desc" },
+        pagination,
+      };
+      request = api
+        .post<typeof body, EntitySearchCasesResponse>("/cases/search", body)
+        .then(
+          (r): CaseDetailsWithCount => ({
+            count: r.total,
+            cases: (r.cases ?? []).map((c) => ({
+              id: c.id,
+              caseId: c.internalId,
+              number: c.number,
+              caseType: "case",
+              priority: "",
+              shortDescription: c.subject ?? "",
+              state: caseStateToDisplay[c.state ?? ""] ?? c.state ?? "",
+              openedAt: "",
+              openedBy: "",
+              description: "",
+              assignedTo: "",
+              accountNumber: "",
+              accountName: "",
+              projectNumber: "",
+              projectKey: "",
+              productName: c.product?.name ?? "",
+              lastWSO2CommentTime: "",
+              lastCustomerCommentTime: "",
+              projectDeploymentName: "",
+              projectDeploymentType: "",
+            })),
+          }),
+        );
+    }
+
+    request
       .then((result) => {
-        if (!cancelled && result) setData(result);
+        if (!cancelled) setData(result);
       })
       .catch(() => {
         // Search is best-effort — a failed lookup just leaves the result list empty.
