@@ -21,7 +21,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"testing"
 
 	"github.com/wso2-open-operations/cs-tools/apps/csm-portal/backend/internal/directory"
@@ -1216,17 +1215,4 @@ func (m *mockCSEntityClient) GetProjectContactByEmail(ctx context.Context, email
 		return m.getProjectContactByEmailFn(ctx, email, projectID)
 	}
 	return nil, nil
-}
-
-// ----- mock ServiceNow client (spl_abt_team_members.go) -----
-
-type mockABTTeamMembersServiceNowClient struct {
-	tableQueryFn func(ctx context.Context, table string, params url.Values) ([]byte, error)
-}
-
-func (m *mockABTTeamMembersServiceNowClient) TableQuery(ctx context.Context, table string, params url.Values) ([]byte, error) {
-	if m.tableQueryFn != nil {
-		return m.tableQueryFn(ctx, table, params)
-	}
-	return []byte(`{"result":[]}`), nil
 }

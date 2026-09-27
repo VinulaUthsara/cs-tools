@@ -198,21 +198,35 @@ func main() {
 			os.Exit(1)
 		}
 
+		// SPL cases/comments now read from entity-service (Postgres) instead
+		// of ServiceNow directly — the ServiceNow-removal transition plan's
+		// "Layer 1", first slice. Attachments still route to snClient inside
+		// this wrapper — see postgresSplCaseClient's own doc comment for why.
+		// Reuses customerEntityClient, the same client every other CS Portal
+		// handler already calls: SPL's data is the same entity-service, not
+		// a separate one.
+		splPostgresCases := handler.NewPostgresSplCaseClient(customerEntityClient, snClient)
+		splPostgresLookups := handler.NewPostgresSplLookupsClient(customerEntityClient, snClient)
+		splPostgresAccounts := handler.NewPostgresSplAccountClient(customerEntityClient, customerEntityClient, snClient)
+		splPostgresProjects := handler.NewPostgresSplProjectClient(customerEntityClient, customerEntityClient)
+		splPostgresAbtTeamMembers := handler.NewPostgresSplAbtTeamMembersClient(customerEntityClient)
+		splPostgresReports := handler.NewPostgresSplReportsClient(customerEntityClient, snClient)
+
 		splHandlers = &splHandlerSet{
-			accounts:       handler.NewSplAccountHandler(snClient, splCfg.allowedGroups, splCfg.addEscalationGroups),
-			projects:       handler.NewSplProjectHandler(snClient, splCfg.allowedGroups),
-			cases:          handler.NewSplCaseHandler(snClient, splCfg.allowedGroups),
-			reports:        handler.NewSplReportsHandler(snClient, splCfg.allowedGroups),
+			accounts:       handler.NewSplAccountHandler(splPostgresAccounts, splCfg.allowedGroups, splCfg.addEscalationGroups),
+			projects:       handler.NewSplProjectHandler(splPostgresProjects, splCfg.allowedGroups),
+			cases:          handler.NewSplCaseHandler(splPostgresCases, splCfg.allowedGroups),
+			reports:        handler.NewSplReportsHandler(splPostgresReports, splCfg.allowedGroups),
 			schedule:       handler.NewSplScheduleHandler(snClient, splCfg.allowedGroups, splCfg.teamScheduleURL),
-			worknotes:      handler.NewSplWorknotesHandler(snClient, splCfg.allowedGroups, splCfg.addWorknoteGroups),
+			worknotes:      handler.NewSplWorknotesHandler(splPostgresCases, splCfg.allowedGroups, splCfg.addWorknoteGroups),
 			attachments:    handler.NewSplAttachmentsHandler(snClient, splCfg.allowedGroups, splCfg.downloadAttachmentGroups),
-			lookups:        handler.NewSplLookupsHandler(snClient, splCfg.allowedGroups),
+			lookups:        handler.NewSplLookupsHandler(splPostgresLookups, splCfg.allowedGroups),
 			usageMetrics:   handler.NewUsageMetricsHandler(snClient, splCfg.allowedGroups, splCfg.usageMetricsGroups),
 			files:          handler.NewSplFilesHandler(driveClient, splCfg.allowedGroups),
 			customerHealth: handler.NewCustomerHealthHandler(riskClient, snClient, splCfg.allowedGroups),
 			userInfo:       handler.NewSplUserInfoHandler(employeeInfoClient, splCfg.allowedGroups),
 			userScan:       handler.NewSplUserScanHandler(salesEntityClient, csEntityClient, splCfg.allowedGroups),
-			abtTeamMembers: handler.NewSplABTTeamMembersHandler(snClient, employeeInfoClient, splCfg.allowedGroups),
+			abtTeamMembers: handler.NewSplABTTeamMembersHandler(splPostgresAbtTeamMembers, employeeInfoClient, splCfg.allowedGroups),
 		}
 		slog.Info("SPL_ENABLED is on: SupportPortalLite's /spl/* endpoints are active")
 	}
@@ -705,7 +719,7 @@ func loadDirectory() *directory.Directory {
 //	AUTH_VIEWER_ROLES, AUTH_ESCALATOR_ROLES,
 //	AUTH_ATTACHMENT_DOWNLOADER_ROLES, AUTH_USAGE_METRICS_VIEWER_ROLES,
 //	AUTH_SUPPORT_ENGINEER_ROLES, AUTH_ADMIN_ROLES, AUTH_TIMECARD_APPROVER_ROLES,
-//	AUTH_DASHBOARD_DESIGNER_ROLES
+//	AUTH_DASHBOARD_DESIGNER_ROLES, AUTH_SALES_SOLUTIONS_ROLES
 //	    Each is a comma-separated list of role names; a caller whose token's
 //	    "roles" claim holds any one of them has that role.
 //
@@ -714,6 +728,12 @@ func loadDirectory() *directory.Directory {
 // lack of a default follows. A role whose variable is unset or empty is held by
 // nobody, and startup warns naming each one, since with none configured at all
 // nobody can use the portal.
+//
+// AUTH_SALES_SOLUTIONS_ROLES is unlike the rest: leaving it unset does not
+// warn, since a deployment that hasn't provisioned a Sales/Solutions-
+// Architecture role yet is a normal, expected state (CS Portal alone still
+// works fine) rather than a misconfiguration nobody can use the portal at
+// all without — see AccessConfig.SalesSolutions's own doc comment.
 func loadAccessConfig() handler.AccessConfig {
 	var unset []string
 	roles := func(name string) []string {
@@ -732,6 +752,7 @@ func loadAccessConfig() handler.AccessConfig {
 		Admin:                roles("AUTH_ADMIN_ROLES"),
 		TimecardApprover:     roles("AUTH_TIMECARD_APPROVER_ROLES"),
 		DashboardDesigner:    roles("AUTH_DASHBOARD_DESIGNER_ROLES"),
+		SalesSolutions:       splitComma(os.Getenv("AUTH_SALES_SOLUTIONS_ROLES")),
 	}
 	if len(unset) > 0 {
 		slog.Warn("access-control role variables are unset, so no token role grants them", "variables", unset)

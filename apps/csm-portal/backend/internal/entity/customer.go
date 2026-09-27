@@ -98,6 +98,12 @@ func (c *CustomerEntityClient) CreateCaseEscalation(ctx context.Context, caseID 
 	return c.do(ctx, http.MethodPost, fmt.Sprintf("/cases/%s/escalations", url.PathEscape(caseID)), body)
 }
 
+// GetTeamMembers calls GET /teams/{id}/members on the entity service.
+// Response is returned as raw JSON; typed response structs are deferred.
+func (c *CustomerEntityClient) GetTeamMembers(ctx context.Context, teamID string) ([]byte, error) {
+	return c.do(ctx, http.MethodGet, fmt.Sprintf("/teams/%s/members", url.PathEscape(teamID)), nil)
+}
+
 // SearchCaseActivities calls POST /cases/{id}/activities/search on the entity service.
 // The path-scoped body is forwarded verbatim and the response is returned as raw JSON;
 // typed response structs are deferred.

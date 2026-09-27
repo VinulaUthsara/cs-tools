@@ -74,6 +74,16 @@ type AccessConfig struct {
 	Admin                []string
 	TimecardApprover     []string
 	DashboardDesigner    []string
+	// SalesSolutions is a marker role, not a capability: it grants no
+	// permission below (a holder still needs one of the roles above to do
+	// anything in CS Portal itself) and gates no route here. It exists so
+	// GET /users/me can report "sales_solutions" in its roles list, which
+	// the webapp's usePortalView reads to pick the Sales/Solutions-
+	// Architecture (SPL) nav over CS Portal's own — see that hook's doc
+	// comment. The actual /spl/* routes still enforce their own, separate,
+	// group-based check (internal/splauth) — unmigrated on purpose, a
+	// follow-up of its own, not folded into this same change.
+	SalesSolutions []string
 }
 
 // AccessGuard authorises a request from the roles on the caller's validated
@@ -102,7 +112,8 @@ type portalRole struct {
 // The usage-metrics and dashboard-designer roles gate nothing here (this backend
 // has no route for those features) and grant only View. Every role implies
 // View, so a user granted only one specialised role can still open the pages it
-// acts on.
+// acts on. sales_solutions is the one exception: it implies nothing and gates
+// nothing here at all — see AccessConfig.SalesSolutions's own doc comment.
 func NewAccessGuard(cfg AccessConfig) *AccessGuard {
 	build := func(lists ...[]string) map[string]struct{} {
 		set := make(map[string]struct{})
@@ -123,6 +134,7 @@ func NewAccessGuard(cfg AccessConfig) *AccessGuard {
 			{"timecard_approver", build(cfg.TimecardApprover)},
 			{"dashboard_designer", build(cfg.DashboardDesigner)},
 			{"admin", build(cfg.Admin)},
+			{"sales_solutions", build(cfg.SalesSolutions)},
 		},
 		allowed: map[Permission]map[string]struct{}{
 			PermView: build(cfg.Viewer, cfg.Escalator, cfg.AttachmentDownloader,

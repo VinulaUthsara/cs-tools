@@ -90,3 +90,74 @@ func (c *Client) GetABTTeamList(ctx context.Context) ([]string, error) {
 	sort.Strings(teams)
 	return teams, nil
 }
+
+// ABTTeamRosterMember is one member of an ABT team's roster, without the
+// employee-thumbnail enrichment (that stays a caller-level concern — see
+// SplABTTeamMembersHandler, which is shared across both the ServiceNow and
+// Postgres data sources).
+type ABTTeamRosterMember struct {
+	Name  string
+	Email string
+	Role  string
+}
+
+type snABTTeamMemberRow struct {
+	UserName  string `json:"user.name"`
+	UserEmail string `json:"user.email"`
+}
+
+type snABTTeamMembersResult struct {
+	Result []snABTTeamMemberRow `json:"result"`
+}
+
+type snTeamMemberRoleRow struct {
+	Role string `json:"u_role"`
+}
+
+type snTeamMemberRolesResult struct {
+	Result []snTeamMemberRoleRow `json:"result"`
+}
+
+// GetABTTeamMembers returns the roster of the ABT team with the given
+// ServiceNow sys_id, with each member's role — ported out of
+// SplABTTeamMembersHandler (moved here so the handler can depend on a small
+// domain interface instead of raw TableQuery, the same shape every other SPL
+// domain already uses, which is what let the Postgres data source implement
+// the same interface). teamID is not sanitized here — the caller
+// (SplABTTeamMembersHandler) already does that before calling in.
+func (c *Client) GetABTTeamMembers(ctx context.Context, teamID string) ([]ABTTeamRosterMember, error) {
+	membersRaw, err := c.TableQuery(ctx, "sys_user_grmember", url.Values{
+		"sysparm_query":  {BuildEncodedQuery("group=" + teamID)},
+		"sysparm_fields": {"user.name, user.email"},
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	var members snABTTeamMembersResult
+	if err := json.Unmarshal(membersRaw, &members); err != nil {
+		return nil, err
+	}
+
+	roster := make([]ABTTeamRosterMember, 0, len(members.Result))
+	for _, m := range members.Result {
+		member := ABTTeamRosterMember{Name: m.UserName, Email: m.UserEmail}
+
+		// user.name is ServiceNow's own returned value for this row, not
+		// caller-supplied input, so it is not run through SanitizeQueryValue
+		// — mirroring the Ballerina source, which also concatenates it
+		// unescaped.
+		roleRaw, err := c.TableQuery(ctx, "u_team_member_role", url.Values{
+			"sysparm_query":  {BuildEncodedQuery("u_member.name=" + m.UserName)},
+			"sysparm_fields": {"u_role"},
+		})
+		if err == nil {
+			var roles snTeamMemberRolesResult
+			if json.Unmarshal(roleRaw, &roles) == nil && len(roles.Result) > 0 {
+				member.Role = roles.Result[0].Role
+			}
+		}
+		roster = append(roster, member)
+	}
+	return roster, nil
+}
