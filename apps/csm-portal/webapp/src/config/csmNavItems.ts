@@ -20,6 +20,7 @@ import {
   Briefcase,
   Bug,
   Building2,
+  CalendarDays,
   ChartColumn,
   Clock,
   ClipboardList,
@@ -28,6 +29,7 @@ import {
   FolderKanban,
   GitPullRequest,
   Headset,
+  HeartPulse,
   KeyRound,
   Layers,
   LifeBuoy,
@@ -119,6 +121,15 @@ export const CSM_NAV_ITEMS: CsmNavSection[] = [
     label: "Support",
     href: "/cases",
     icon: Headset,
+  },
+  {
+    id: "team-schedule",
+    label: "Team Schedule",
+    href: "/team-schedule",
+    // No `requires`: the rota is readable by everyone who can open the portal.
+    // Editing it is a lead's job and will gate on its own flag when the write
+    // routes land.
+    icon: CalendarDays,
   },
   {
     id: "operations",
@@ -373,12 +384,12 @@ export const CSM_NAV_ITEMS: CsmNavSection[] = [
     label: "Support Portal Lite",
     href: "/spl/accounts",
     icon: Layers,
-    // Cases, Team schedule, User scan, Customer health and Usage metrics
-    // land in their own follow-up PRs (this port was split by domain to
-    // stay under CodeRabbit's 100-file review limit) -- each adds its own
-    // entry to this list, and the first one to merge should also move
-    // href back to /spl/cases (SPL's real landing page; see App.tsx's
-    // RootLanding for the matching redirect).
+    // Cases, Team schedule, User scan and Usage metrics land in their own
+    // follow-up PRs (this port was split by domain to stay under
+    // CodeRabbit's 100-file review limit) -- each adds its own entry to
+    // this list, and the first one to merge should also move href back to
+    // /spl/cases (SPL's real landing page; see App.tsx's RootLanding for
+    // the matching redirect).
     children: [
       {
         id: "spl.accounts",
@@ -392,6 +403,12 @@ export const CSM_NAV_ITEMS: CsmNavSection[] = [
         routes: ["/spl/my-accounts"],
       },
       { id: "spl.projects", label: "Projects", href: "/spl/projects", icon: FolderKanban },
+      {
+        id: "spl.customer-health",
+        label: "Customer health",
+        href: "/spl/customer-health",
+        icon: HeartPulse,
+      },
     ],
   },
   // PLG Customer Success Portal. Declared in
