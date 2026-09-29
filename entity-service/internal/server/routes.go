@@ -243,13 +243,19 @@ func NewRouter(db *pgxpool.Pool, cfg *config.Config) (http.Handler, func()) {
 			ClientSecret: cfg.SalesEntityClientSecret,
 			Scopes:       cfg.SalesEntityScopes,
 		})
+		// A nil account repository turns the Account branch off: its envelopes
+		// are acknowledged and ignored (see CSMMigrationSalesforceAccountIngestEnabled).
+		var accountIngestRepo repository.AccountRepository
+		if cfg.CSMMigrationSalesforceAccountIngestEnabled {
+			accountIngestRepo = accountRepo
+		}
 		if cfg.CSMMigrationSalesforceMembershipIngestEnabled {
 			// The membership branch (Project_Contact__c / Contact envelopes)
 			// writes user/account_contact/project_contact rows and the
 			// DATABASE onboarding step, and publishes project_contact.invited
 			// when eventPublisher is configured (nil is a no-op there).
 			membershipIngestSvc = service.NewSalesforceEventServiceWithMembershipIngest(
-				accountRepo, salesEntityClient, service.MembershipIngest{
+				accountIngestRepo, salesEntityClient, service.MembershipIngest{
 					Memberships: repository.NewProjectMembershipRepository(db),
 					Steps:       repository.NewOnboardingStepRepository(db),
 					SalesEntity: salesEntityClient,
@@ -257,7 +263,7 @@ func NewRouter(db *pgxpool.Pool, cfg *config.Config) (http.Handler, func()) {
 				})
 			salesforceEventHandler = handler.NewSalesforceEventHandler(membershipIngestSvc)
 		} else {
-			salesforceEventHandler = handler.NewSalesforceEventHandler(service.NewSalesforceEventService(accountRepo, salesEntityClient))
+			salesforceEventHandler = handler.NewSalesforceEventHandler(service.NewSalesforceEventService(accountIngestRepo, salesEntityClient))
 		}
 	}
 
@@ -536,7 +542,7 @@ func NewRouter(db *pgxpool.Pool, cfg *config.Config) (http.Handler, func()) {
 	var caseAttachmentOverrideSvc service.CaseService
 	switch cfg.DataSource {
 	case config.DataSourceServiceNow:
-		pgCaseFallbackSvc := service.NewCaseService(caseRepo, userRepo, eventPublisher, accessSvc)
+		pgCaseFallbackSvc := service.NewCaseService(caseRepo, userRepo, eventPublisher, accessSvc, projectContactRepo)
 		activeCaseSvc = service.NewServiceNowCaseService(serviceNowIntegrationServiceClient, pgCaseFallbackSvc, eventPublisher, snUserService, cfg.CustomerRoles, cfg.CSEngineerRole, slaEngineSvc)
 	case config.DataSourcePostgresServiceNowDualWrite:
 		// Pilot: case CREATE, and UPDATE's WorkState field only.
@@ -586,7 +592,7 @@ func NewRouter(db *pgxpool.Pool, cfg *config.Config) (http.Handler, func()) {
 		// and it is caseAttachmentOverrideSvc below, for case attachments
 		// specifically.
 		snCaseMirrorSvc := service.NewServiceNowCaseService(serviceNowIntegrationServiceClient, nil, nil, snUserService, cfg.CustomerRoles, cfg.CSEngineerRole, slaEngineSvc)
-		activeCaseSvc = service.NewCaseServiceWithSNWriteback(caseRepo, userRepo, eventPublisher, accessSvc, snWritebackDispatcher, snCaseMirrorSvc)
+		activeCaseSvc = service.NewCaseServiceWithSNWriteback(caseRepo, userRepo, eventPublisher, accessSvc, projectContactRepo, snWritebackDispatcher, snCaseMirrorSvc)
 		// Case ATTACHMENTS are ServiceNow-only in this mode, permanently —
 		// unlike case metadata (CREATE/UPDATE above), not a pilot scope
 		// decision but a hard requirement: the sftpgo-backed Postgres
@@ -610,7 +616,7 @@ func NewRouter(db *pgxpool.Pool, cfg *config.Config) (http.Handler, func()) {
 		// confirm), not something this override introduces.
 		caseAttachmentOverrideSvc = snCaseMirrorSvc
 	default:
-		activeCaseSvc = service.NewCaseService(caseRepo, userRepo, eventPublisher, accessSvc)
+		activeCaseSvc = service.NewCaseService(caseRepo, userRepo, eventPublisher, accessSvc, projectContactRepo)
 	}
 	caseHandler := handler.NewCaseHandler(activeCaseSvc, cfg.M2MTrustedActorEmails)
 	if db != nil {
