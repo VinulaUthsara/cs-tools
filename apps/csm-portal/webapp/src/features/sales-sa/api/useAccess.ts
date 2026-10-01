@@ -32,11 +32,11 @@
 // The audience question here — does this caller have any business in SPL
 // at all — and the nav-default question there are answered separately on
 // purpose; keep them that way rather than merging the two checks. See
-// internal/handler/access.go's PermSPLAccess for the matching backend
+// internal/handler/access.go's PermViewerAccess for the matching backend
 // grant, which must stay in sync with this hook's role check.
 //
 // Real enforcement is server-side: every /spl/* route on the Go backend
-// re-checks PermSPLAccess (internal/handler/access.go), currently granted
+// re-checks PermViewerAccess (internal/handler/access.go), currently granted
 // by the same Viewer role this hook checks. A caller who reaches an SPL
 // screen without the role sees a 403 from every call it makes, same as
 // any other tampered/stale-claim scenario in this app.
