@@ -55,7 +55,7 @@ export interface Access {
 // key (apps/csm-portal/backend/internal/handler/access.go) -- see this
 // file's own top-of-file comment for why this check is unconditional
 // (no cs_engineer exclusion) unlike usePortalView.ts's nav-default choice.
-const SALES_SA_AUDIENCE_ROLE = "viewer";
+const VIEWER_AUDIENCE_ROLE = "viewer";
 
 export function useAccess(): Access {
   let roles: string[] | undefined;
@@ -77,6 +77,6 @@ export function useAccess(): Access {
     // when the signed-in account has no portal roles provisioned yet.
     if (devBypassAccessCheck) return { ready: true, hasAccess: true };
     if (isLoading) return { ready: false, hasAccess: false };
-    return { ready: true, hasAccess: (roles ?? []).includes(SALES_SA_AUDIENCE_ROLE) };
+    return { ready: true, hasAccess: (roles ?? []).includes(VIEWER_AUDIENCE_ROLE) };
   }, [roles, isLoading]);
 }
