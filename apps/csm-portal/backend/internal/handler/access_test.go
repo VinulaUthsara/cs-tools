@@ -19,6 +19,7 @@ package handler
 import (
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"slices"
 	"testing"
 
@@ -393,6 +394,60 @@ func TestAccessGuard_PlgIsForCsEngineersAndAdmins(t *testing.T) {
 	} {
 		if status, _ := serveWithRoles(g, PermUsePlg, []string{role}); status != http.StatusForbidden {
 			t.Errorf("%s holds PermView but must not hold PermUsePlg: status = %d, want 403", role, status)
+		}
+	}
+}
+
+// TestAccessGuard_CustomerHealthIsForViewersCsEngineersAndAdmins pins
+// PermViewCustomerHealth as wider than PermViewerAccess (Viewer only) but
+// still narrower than PermView: a cs_engineer or admin reaches the dashboard
+// without separately holding Viewer, while the other portal roles do not.
+func TestAccessGuard_CustomerHealthIsForViewersCsEngineersAndAdmins(t *testing.T) {
+	g := NewAccessGuard(testAccessConfig())
+	for _, role := range []string{"test-viewer", "test-cs-engineer", "test-admin"} {
+		if status, _ := serveWithRoles(g, PermViewCustomerHealth, []string{role}); status != http.StatusNoContent {
+			t.Errorf("%s: status = %d, want 204", role, status)
+		}
+	}
+	for _, role := range rolesOutsideCustomerHealthAudience() {
+		if status, _ := serveWithRoles(g, PermViewCustomerHealth, []string{role}); status != http.StatusForbidden {
+			t.Errorf("%s must not hold PermViewCustomerHealth: status = %d, want 403", role, status)
+		}
+	}
+	if status, _ := serveWithRoles(g, PermViewCustomerHealth, nil); status != http.StatusForbidden {
+		t.Errorf("no roles: status = %d, want 403", status)
+	}
+}
+
+// rolesOutsideCustomerHealthAudience returns the test token role of every
+// configured portal role except the three that hold PermViewCustomerHealth
+// (Viewer, CsEngineer, Admin). It reads AccessConfig by reflection so a role
+// added to the config later is assumed to be OUTSIDE the audience, and the
+// tests below fail if it is ever granted the permission by mistake.
+func rolesOutsideCustomerHealthAudience() []string {
+	cfg := reflect.ValueOf(testAccessConfig())
+	var roles []string
+	for i := 0; i < cfg.NumField(); i++ {
+		switch cfg.Type().Field(i).Name {
+		case "Viewer", "CsEngineer", "Admin":
+			continue
+		}
+		if names, ok := cfg.Field(i).Interface().([]string); ok {
+			roles = append(roles, names...)
+		}
+	}
+	return roles
+}
+
+// TestAccessGuard_CustomerHealthDoesNotWidenTheRestOfViewerAccess guards the
+// other direction: giving cs_engineer/admin the Customer Health dashboard must
+// not hand them the rest of the viewer-audience routes (User Scan, the Time
+// report, the account escalation list, Drive files), which stay Viewer-only.
+func TestAccessGuard_CustomerHealthDoesNotWidenTheRestOfViewerAccess(t *testing.T) {
+	g := NewAccessGuard(testAccessConfig())
+	for _, role := range []string{"test-cs-engineer", "test-admin"} {
+		if status, _ := serveWithRoles(g, PermViewerAccess, []string{role}); status != http.StatusForbidden {
+			t.Errorf("%s: PermViewerAccess status = %d, want 403 (still Viewer-only)", role, status)
 		}
 	}
 }
