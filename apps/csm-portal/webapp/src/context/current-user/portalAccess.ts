@@ -188,6 +188,17 @@ export interface PortalAccess {
    */
   canViewCustomerHealth: boolean;
   /**
+   * Where the sidebar offers Customer Health, not whether it is offered: true
+   * for a `viewer` who holds neither `cs_engineer` nor `admin`. For them the
+   * Customers entry opens as a dropdown (Accounts, Projects, Customer Health)
+   * and the separate top-level Customer Health entry is dropped; everyone else
+   * who can see the dashboard ({@link canViewCustomerHealth}) keeps the
+   * top-level entry. A `cs_engineer` or `admin` who also holds `viewer` counts
+   * as a CS engineer here. The page, its route and the backend permission are
+   * the same either way.
+   */
+  showCustomerHealthUnderCustomers: boolean;
+  /**
    * Usage metrics requires `cs_engineer`/`admin` (full access) or the
    * dedicated `usage_metrics_viewer` role. Unlike {@link isSplAudience},
    * holding plain `viewer` does NOT grant this on its own — reported live:
@@ -282,6 +293,9 @@ export function getPortalAccess(roles: string[] | undefined): PortalAccess {
       canUpdateDeleteAnyComment: true,
       isSplAudience: true,
       canViewCustomerHealth: true,
+      // Placement, not a capability: the bypass grants full access, and full
+      // access keeps the top-level entry.
+      showCustomerHealthUnderCustomers: false,
       canViewUsageMetrics: true,
       canViewStaffSections: true,
       canViewTeamSchedule: true,
@@ -317,6 +331,7 @@ export function getPortalAccess(roles: string[] | undefined): PortalAccess {
     canUpdateDeleteAnyComment: isAdmin || has(PORTAL_ROLE.commentUpdater),
     isSplAudience: has(PORTAL_ROLE.viewer),
     canViewCustomerHealth: full || has(PORTAL_ROLE.viewer),
+    showCustomerHealthUnderCustomers: has(PORTAL_ROLE.viewer) && !full,
     canViewUsageMetrics: full || has(PORTAL_ROLE.usageMetricsViewer),
     canViewStaffSections: !(held.size === 1 && has(PORTAL_ROLE.viewer)),
     canViewTeamSchedule: full || has(PORTAL_ROLE.commentUpdater),

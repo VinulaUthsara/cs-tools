@@ -32,6 +32,7 @@ const NONE = {
   canUpdateDeleteAnyComment: false,
   isSplAudience: false,
   canViewCustomerHealth: false,
+  showCustomerHealthUnderCustomers: false,
   canViewUsageMetrics: false,
   // NONE represents "no roles at all" everywhere it's used directly, and a
   // caller with no roles can't reach the portal to begin with -- but every
@@ -63,6 +64,9 @@ describe("getPortalAccess", () => {
       hasAnyRole: true,
       isSplAudience: true,
       canViewCustomerHealth: true,
+      // A viewer who is not also a CS engineer/admin finds Customer Health
+      // under Customers in the sidebar.
+      showCustomerHealthUnderCustomers: true,
       // A viewer-only role set (exactly {viewer}) is the one case this flag
       // is false for -- see the dedicated canViewStaffSections describe block.
       canViewStaffSections: false,
@@ -145,6 +149,8 @@ describe("getPortalAccess", () => {
       // false for both.
       isSplAudience: false,
       canViewCustomerHealth: true,
+      // CS engineers and admins keep the top-level Customer Health entry.
+      showCustomerHealthUnderCustomers: false,
       canViewUsageMetrics: true,
       // Role set is {cs_engineer}/{admin}, not exactly {viewer}.
       canViewStaffSections: true,
@@ -311,6 +317,7 @@ describe("getPortalAccess", () => {
       canDownloadAttachment: true,
       isSplAudience: true,
       canViewCustomerHealth: true,
+      showCustomerHealthUnderCustomers: true,
     });
   });
 
@@ -475,6 +482,40 @@ describe("getPortalAccess", () => {
       ]) {
         expect(getPortalAccess([role]).canViewCustomerHealth).toBe(false);
       }
+    });
+  });
+
+  // Placement only: a viewer who is not a CS engineer/admin gets Customer
+  // Health under the Customers dropdown; everyone else who sees it keeps the
+  // top-level entry. See the flag's own doc comment.
+  describe("showCustomerHealthUnderCustomers", () => {
+    it("is true for a viewer, alone or with other non-staff roles", () => {
+      expect(getPortalAccess(["viewer"]).showCustomerHealthUnderCustomers).toBe(true);
+      expect(getPortalAccess(["viewer", "escalator"]).showCustomerHealthUnderCustomers).toBe(true);
+      expect(getPortalAccess(["viewer", "usage_metrics_viewer"]).showCustomerHealthUnderCustomers).toBe(true);
+      expect(getPortalAccess(["viewer", "worknote_creator"]).showCustomerHealthUnderCustomers).toBe(true);
+    });
+
+    it("is false for a CS engineer or admin, even one who also holds viewer", () => {
+      for (const roles of [["cs_engineer"], ["admin"], ["cs_engineer", "viewer"], ["admin", "viewer"]]) {
+        expect(getPortalAccess(roles).showCustomerHealthUnderCustomers).toBe(false);
+      }
+    });
+
+    it("is false for every role that cannot see Customer Health at all", () => {
+      for (const role of [
+        "escalator",
+        "attachment_downloader",
+        "usage_metrics_viewer",
+        "timecard_approver",
+        "dashboard_designer",
+        "worknote_creator",
+        "announcement_creator",
+        "comment_updater",
+      ]) {
+        expect(getPortalAccess([role]).showCustomerHealthUnderCustomers).toBe(false);
+      }
+      expect(getPortalAccess(undefined).showCustomerHealthUnderCustomers).toBe(false);
     });
   });
 

@@ -40,6 +40,7 @@ import {
   CSM_NAV_ITEMS,
   type CsmNavNode,
   flattenNavNodes,
+  isNavShortcut,
   navNodeForPath,
 } from "@config/csmNavItems";
 import type { ComponentType } from "react";
@@ -122,11 +123,16 @@ function parseOverrides(): Record<string, FeatureState> {
  *    resurrect a page whose section does not exist.
  * 2. Otherwise a node's own override wins.
  * 3. Otherwise it inherits its parent's state, so marking a section `wip`
- *    marks its tabs `wip` without listing each one.
+ *    marks its tabs `wip` without listing each one. A shortcut (see
+ *    `CsmNavNode.shortcutTo`) is the exception: it is not one of its section's
+ *    tabs, so it does not inherit a `wip` section's state (a `hidden` section
+ *    still hides it, rule 1). Whether a WIP section offers its shortcut at all
+ *    is decided per user, see `isShortcutOffered`.
  * 4. Otherwise it is `enabled`.
  * 5. Finally, a `wip` section with at least one `enabled` tab is promoted to
  *    `enabled` — the section has something usable in it, so it must stay
- *    clickable or that tab would be reachable only by deep link.
+ *    clickable or that tab would be reachable only by deep link. A shortcut
+ *    does not count as a tab here either.
  */
 function computeStates(): Map<string, FeatureState> {
   const overrides = parseOverrides();
@@ -134,8 +140,9 @@ function computeStates(): Map<string, FeatureState> {
 
   const inherit = (nodes: readonly CsmNavNode[], parent: FeatureState): void => {
     for (const node of nodes) {
+      const inherited: FeatureState = isNavShortcut(node) ? "enabled" : parent;
       const state: FeatureState =
-        parent === "hidden" ? "hidden" : (overrides[node.id] ?? parent);
+        parent === "hidden" ? "hidden" : (overrides[node.id] ?? inherited);
       states.set(node.id, state);
       if (node.children?.length) inherit(node.children, state);
     }
@@ -147,7 +154,7 @@ function computeStates(): Map<string, FeatureState> {
       if (!node.children?.length) continue;
       promote(node.children);
       const hasUsableChild = node.children.some(
-        (child) => states.get(child.id) === "enabled",
+        (child) => !isNavShortcut(child) && states.get(child.id) === "enabled",
       );
       if (states.get(node.id) === "wip" && hasUsableChild) {
         states.set(node.id, "enabled");
@@ -205,10 +212,84 @@ function requirements(): Map<string, keyof PortalAccess> {
  * deployment-wide state.
  */
 export function featureState(id: string, access?: PortalAccess): FeatureState {
+  const own = ownFeatureState(id, access);
+  const owner = shortcutOwners().get(id);
+  return owner === undefined ? own : narrower(own, ownFeatureState(owner, access));
+}
+
+/** {@link featureState} before a shortcut is narrowed to its owner's state. */
+function ownFeatureState(id: string, access?: PortalAccess): FeatureState {
   const state = states().get(id) ?? "enabled";
   if (state === "hidden" || !access) return state;
   const need = requirements().get(id);
   return need && !access[need] ? "hidden" : state;
+}
+
+const STATE_RANK: Record<FeatureState, number> = { enabled: 0, wip: 1, hidden: 2 };
+
+/** The more restrictive of two states: hidden over wip over enabled. */
+function narrower(a: FeatureState, b: FeatureState): FeatureState {
+  return STATE_RANK[a] >= STATE_RANK[b] ? a : b;
+}
+
+interface ShortcutLinks {
+  /** Shortcut id → the id of the node that owns its page. */
+  owners: Map<string, string>;
+  /** Shortcut id → the id of the section it is listed under. */
+  sections: Map<string, string>;
+}
+
+let cachedShortcutLinks: ShortcutLinks | undefined;
+
+/**
+ * Where each shortcut (see {@link CsmNavNode.shortcutTo}) points and where it
+ * sits. A shortcut is never more visible than its owner: hiding or WIP-ing the
+ * owner through a deployment override, or a role that cannot reach the owner,
+ * applies to the shortcut too.
+ */
+function shortcutLinks(): ShortcutLinks {
+  if (!cachedShortcutLinks) {
+    const links: ShortcutLinks = { owners: new Map(), sections: new Map() };
+    const walk = (nodes: readonly CsmNavNode[], parentId?: string): void => {
+      for (const node of nodes) {
+        if (node.shortcutTo) {
+          links.owners.set(node.id, node.shortcutTo);
+          if (parentId) links.sections.set(node.id, parentId);
+        }
+        if (node.children?.length) walk(node.children, node.id);
+      }
+    };
+    walk(CSM_NAV_ITEMS);
+    cachedShortcutLinks = links;
+  }
+  return cachedShortcutLinks;
+}
+
+function shortcutOwners(): Map<string, string> {
+  return shortcutLinks().owners;
+}
+
+/**
+ * True when `node` is a shortcut this user is actually offered in the
+ * sidebar: it is visible for them, and the section it sits in is `enabled`
+ * for them — a WIP section renders as one disabled entry with no dropdown, so
+ * a shortcut inside it could never be reached, and its owner must keep its own
+ * entry instead.
+ */
+function isShortcutOffered(node: CsmNavNode, access: PortalAccess): boolean {
+  if (!isNavShortcut(node) || !isFeatureVisible(node.id, access)) return false;
+  const sectionId = shortcutLinks().sections.get(node.id);
+  return sectionId === undefined || isFeatureEnabled(sectionId, access);
+}
+
+/**
+ * The shortcut this user is offered for the page `ownerId` owns, if any — the
+ * entry the sidebar shows (and highlights) in place of the owner's own.
+ */
+export function visibleShortcutTo(ownerId: string, access: PortalAccess): CsmNavNode | undefined {
+  return flattenNavNodes().find(
+    (node) => node.shortcutTo === ownerId && isShortcutOffered(node, access),
+  );
 }
 
 /** True when the page should appear in navigation at all (enabled or WIP). */
@@ -227,19 +308,50 @@ export function featureStateForPath(pathname: string, access?: PortalAccess): Fe
   return node ? featureState(node.id, access) : "enabled";
 }
 
-/** Top-level sections that should render in the sidebar. */
+/**
+ * Top-level sections that should render in the sidebar. With `access`, a
+ * section this user reaches through a visible shortcut elsewhere in the
+ * sidebar is left out, so the page is offered once (see
+ * {@link CsmNavNode.shortcutTo}).
+ */
 export function visibleNavSections(access?: PortalAccess): typeof CSM_NAV_ITEMS {
-  return CSM_NAV_ITEMS.filter((section) => isFeatureVisible(section.id, access));
+  return CSM_NAV_ITEMS.filter(
+    (section) =>
+      isFeatureVisible(section.id, access) &&
+      !(access && visibleShortcutTo(section.id, access)),
+  );
 }
 
-/** A node's tabs that should render in its tab strip. */
+/**
+ * A node's tabs that should render in its tab strip. Shortcuts are not tabs:
+ * their page lives outside the section.
+ */
 export function visibleNavChildren(node: CsmNavNode, access?: PortalAccess): CsmNavNode[] {
-  return (node.children ?? []).filter((child) => isFeatureVisible(child.id, access));
+  return (node.children ?? []).filter(
+    (child) => !isNavShortcut(child) && isFeatureVisible(child.id, access),
+  );
 }
 
-/** A node's tabs that are actually usable. */
+/** A node's tabs that are actually usable. Shortcuts are not tabs. */
 export function enabledNavChildren(node: CsmNavNode, access?: PortalAccess): CsmNavNode[] {
-  return (node.children ?? []).filter((child) => isFeatureEnabled(child.id, access));
+  return (node.children ?? []).filter(
+    (child) => !isNavShortcut(child) && isFeatureEnabled(child.id, access),
+  );
+}
+
+/**
+ * A section's children as sidebar dropdown entries: its tabs plus any
+ * shortcut this user is offered.
+ */
+export function visibleRailChildren(node: CsmNavNode, access: PortalAccess): CsmNavNode[] {
+  return (node.children ?? []).filter((child) =>
+    isNavShortcut(child) ? isShortcutOffered(child, access) : isFeatureVisible(child.id, access),
+  );
+}
+
+/** True when `section` has a shortcut child this user is offered. */
+export function hasVisibleShortcutChild(section: CsmNavNode, access: PortalAccess): boolean {
+  return (section.children ?? []).some((child) => isShortcutOffered(child, access));
 }
 
 /** A page the Quick-nav palette can offer as a destination. */
