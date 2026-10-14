@@ -20,6 +20,7 @@ import {
   featureState,
   featureStateForPath,
   firstEnabledDestination,
+  listPreviewableFeatures,
   navigableNavNodes,
   resetFeatureStatesForTests,
   visibleNavChildren,
@@ -368,6 +369,25 @@ describe("Customer Health under Customers for a viewer", () => {
     setOverrides({ customers: "wip", "customers.customer-health": "enabled" });
     expect(featureState("customers")).toBe("wip");
     expect(featureState("customers", getPortalAccess(["cs_engineer"]))).toBe("wip");
+  });
+
+  // An admin's Feature Preview toggles (featurePreview.ts) only ever promote
+  // for that admin; the shortcut is for viewers, so it has no toggle of its
+  // own and a viewer never benefits from an admin's preview.
+  it("leaves the shortcut out of the Feature Preview list, where its toggle could do nothing", () => {
+    const admin = getPortalAccess(["admin"]);
+    expect(ids(listPreviewableFeatures(admin))).not.toContain("customers.customer-health");
+    setOverrides({ "customer-health": "hidden" });
+    expect(ids(listPreviewableFeatures(admin))).toContain("customer-health");
+    expect(ids(listPreviewableFeatures(admin))).not.toContain("customers.customer-health");
+  });
+
+  it("lets an admin preview a hidden Customer Health without showing it to viewers", () => {
+    setOverrides({ "customer-health": "hidden" });
+    const preview = { "customer-health": true };
+    expect(ids(visibleNavSections(getPortalAccess(["admin"]), preview))).toContain("customer-health");
+    expect(ids(visibleNavSections(viewer, preview))).not.toContain("customer-health");
+    expect(visibleShortcutTo("customer-health", viewer, preview)).toBeUndefined();
   });
 
   it("hides the shortcut from a role that cannot reach the Customer Health page itself", () => {

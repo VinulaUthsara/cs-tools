@@ -31,8 +31,9 @@ import {
   visibleRailChildren,
   visibleShortcutTo,
 } from "@config/featureFlags";
+import { useFeaturePreviewOverrides } from "@config/featurePreview";
 import type { PortalAccess } from "@context/current-user/portalAccess";
-import { usePortalAccess } from "@context/current-user/usePortalAccess";
+import { usePortalAccess, useSafeCurrentUserId } from "@context/current-user/usePortalAccess";
 import { useNavTransition } from "@hooks/useNavTransition";
 
 /** Tooltip for a disabled WIP item. Includes the label so the collapsed rail
@@ -96,12 +97,23 @@ interface CsmSideBarProps {
  * so the rail is the only place it can be offered. Its route tabs then appear
  * in the dropdown too, since the dropdown's parent no longer navigates.
  */
-function isSubmenuSection(section: CsmNavSection, access: PortalAccess): boolean {
+function isSubmenuSection(
+  section: CsmNavSection,
+  access: PortalAccess,
+  previewOverrides?: Record<string, boolean>,
+): boolean {
   if (!section.children?.length) return false;
-  return section.children.every((child) => Boolean(child.tab)) || hasVisibleShortcutChild(section, access);
+  return (
+    section.children.every((child) => Boolean(child.tab)) ||
+    hasVisibleShortcutChild(section, access, previewOverrides)
+  );
 }
 
-function pickActiveId(pathname: string, access: PortalAccess): string {
+function pickActiveId(
+  pathname: string,
+  access: PortalAccess,
+  previewOverrides?: Record<string, boolean>,
+): string {
   if (pathname === "/" || pathname === "") return "dashboard";
   // A submenu section's own child (e.g. `operations.incidents`) gets its own
   // rail entry, so highlight *that* rather than the section — this is what
@@ -117,7 +129,7 @@ function pickActiveId(pathname: string, access: PortalAccess): string {
   // Customers, for a viewer) lights up the shortcut: the owner's own entry is
   // not in their rail at all.
   if (match) {
-    const shortcut = visibleShortcutTo(match.node.id, access);
+    const shortcut = visibleShortcutTo(match.node.id, access, previewOverrides);
     if (shortcut) return shortcut.id;
   }
   const section = navSectionForPath(pathname);
@@ -130,7 +142,7 @@ function pickActiveId(pathname: string, access: PortalAccess): string {
     match &&
     match.node !== section &&
     section.children?.includes(match.node) &&
-    isSubmenuSection(section, access)
+    isSubmenuSection(section, access, previewOverrides)
   ) {
     return match.node.id;
   }
@@ -144,9 +156,14 @@ export default function CsmSideBar({
   onToggleExpand,
 }: CsmSideBarProps): JSX.Element {
   const access = usePortalAccess();
+  // An admin's own Feature Preview toggles (browser-local, see
+  // featurePreview.ts) can promote a hidden/WIP nav entry to visible/usable
+  // for them alone -- never for any other caller, and never touching the
+  // deployment-wide config itself.
+  const { overrides: previewOverrides } = useFeaturePreviewOverrides(useSafeCurrentUserId());
   const location = useLocation();
   const navigate = useNavTransition();
-  const activeItem = pickActiveId(location.pathname, access);
+  const activeItem = pickActiveId(location.pathname, access, previewOverrides);
   useEffect(() => {
     // The persisted id is the fallback used for routes with no owning section
     // (see `pickActiveId`'s doc comment) -- it must stay a *section* id.
@@ -172,13 +189,13 @@ export default function CsmSideBar({
   // wrapped in a disabling `Box`/`Tooltip` the way a top-level WIP section is.
   const handleSelect = useCallback(
     (id: string): void => {
-      if (id.includes(".") && featureState(id) !== "wip") {
+      if (id.includes(".") && featureState(id, access, previewOverrides) !== "wip") {
         const node = navNodeById(id);
         if (node) navigate(navNodeHref(node));
       }
       onSelect?.(id);
     },
-    [navigate, onSelect],
+    [navigate, onSelect, access, previewOverrides],
   );
 
   // A submenu section auto-expands the very first time one of its own
@@ -237,7 +254,7 @@ export default function CsmSideBar({
           {
             /* `hidden` sections are filtered out entirely; `wip` ones stay
                rendered but disabled below. */
-            visibleNavSections(access)
+            visibleNavSections(access, previewOverrides)
               .map((item) => {
                 const itemContent = (
                   <Sidebar.Item id={item.id}>
@@ -258,7 +275,7 @@ export default function CsmSideBar({
                 // reach it and reveal the "work in progress" tooltip, which fires on
                 // both hover and focus. Their routes render the coming-soon page
                 // (see App.tsx's WipRouteGuard).
-                if (featureState(item.id) === "wip") {
+                if (featureState(item.id, access, previewOverrides) === "wip") {
                   return (
                     <Tooltip
                       key={item.id}
@@ -286,7 +303,9 @@ export default function CsmSideBar({
                 // children (below) navigate. A section whose config has hidden
                 // every one of its children falls through to the plain flat item
                 // instead of rendering an entry with nothing to expand.
-                const children = isSubmenuSection(item, access) ? visibleRailChildren(item, access) : [];
+                const children = isSubmenuSection(item, access, previewOverrides)
+                  ? visibleRailChildren(item, access, previewOverrides)
+                  : [];
                 if (children.length > 0) {
                   return (
                     <Sidebar.Item id={item.id} key={item.id}>
@@ -295,7 +314,8 @@ export default function CsmSideBar({
                       </Sidebar.ItemIcon>
                       <Sidebar.ItemLabel>{item.label}</Sidebar.ItemLabel>
                       {children.map((child) => {
-                        const childWip = featureState(child.id) === "wip";
+                        const childWip =
+                          featureState(child.id, access, previewOverrides) === "wip";
                         return (
                           <Sidebar.Item id={child.id} key={child.id}>
                             {child.icon && (

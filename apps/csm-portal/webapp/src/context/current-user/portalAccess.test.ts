@@ -46,6 +46,7 @@ const NONE = {
   canViewTeamSchedule: false,
   canViewSettings: false,
   canViewWorkItemsStaffView: false,
+  isAdmin: false,
 };
 
 describe("getPortalAccess", () => {
@@ -164,7 +165,9 @@ describe("getPortalAccess", () => {
     // canCreateUser: both roles hold canUsePlg, only admin may author a
     // playbook template. canCreateAnnouncement is the one write a plain CS
     // engineer no longer holds: sending an announcement needs the
-    // announcement_creator role (admin always has it).
+    // announcement_creator role (admin always has it). isAdmin is the one
+    // flag keyed on the role itself, not a derived permission -- cs_engineer
+    // never holds it even though it shares every other capability with admin.
     expect(getPortalAccess(["cs_engineer"])).toEqual({
       ...all,
       canCreateUser: false,
@@ -172,6 +175,7 @@ describe("getPortalAccess", () => {
       canManagePlaybooks: false,
       canCreateAnnouncement: false,
       canUpdateDeleteAnyComment: false,
+      isAdmin: false,
     });
     expect(getPortalAccess(["admin"])).toEqual({
       ...all,
@@ -180,6 +184,7 @@ describe("getPortalAccess", () => {
       canManagePlaybooks: true,
       canCreateAnnouncement: true,
       canUpdateDeleteAnyComment: true,
+      isAdmin: true,
     });
   });
 
@@ -704,6 +709,36 @@ describe("getPortalAccess", () => {
 
     it("is false while roles are not loaded, so the controls fail closed", () => {
       expect(getPortalAccess(undefined).canViewSettings).toBe(false);
+    });
+  });
+
+  // Unlike every other flag, this one is keyed on holding the `admin` role
+  // itself, not a derived permission -- cs_engineer shares every other
+  // capability with admin but never holds this one.
+  describe("isAdmin", () => {
+    it("is true only for admin, not for cs_engineer or any other role", () => {
+      expect(getPortalAccess(["admin"]).isAdmin).toBe(true);
+      for (const role of [
+        "cs_engineer",
+        "viewer",
+        "escalator",
+        "attachment_downloader",
+        "usage_metrics_viewer",
+        "timecard_approver",
+        "dashboard_designer",
+        "plg_admin",
+      ]) {
+        expect(getPortalAccess([role]).isAdmin).toBe(false);
+      }
+    });
+
+    it("is false while roles are not loaded or empty", () => {
+      expect(getPortalAccess(undefined).isAdmin).toBe(false);
+      expect(getPortalAccess([]).isAdmin).toBe(false);
+    });
+
+    it("matches the role key case-insensitively", () => {
+      expect(getPortalAccess(["Admin"]).isAdmin).toBe(true);
     });
   });
 });
